@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"roonamp/internal/config"
 	"roonamp/internal/roon"
@@ -15,31 +14,16 @@ import (
 func main() {
 	cfg := config.Load()
 
-	var host, port string
-
-	if cfg.RoonHost != "" && cfg.RoonPort != "" {
-		host = cfg.RoonHost
-		port = cfg.RoonPort
-		fmt.Printf("Using configured server: %s:%s\n", host, port)
-	} else {
-		fmt.Println("Scanning for Roon servers...")
-		cores, err := roon.Discover(5 * time.Second)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Discovery error: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Set ROON_HOST and ROON_PORT env vars to connect manually.")
-			os.Exit(1)
-		}
-		if len(cores) == 0 {
-			fmt.Fprintln(os.Stderr, "No Roon servers found.")
-			fmt.Fprintln(os.Stderr, "Set ROON_HOST and ROON_PORT env vars to connect manually.")
-			os.Exit(1)
-		}
-
-		core := cores[0]
-		host = core.IP
-		port = core.HTTPPort
-		fmt.Printf("Found: %s (%s:%s)\n", core.DisplayName, host, port)
+	if cfg.RoonHost == "" || cfg.RoonPort == "" {
+		fmt.Fprintln(os.Stderr, "Roon server address required.")
+		fmt.Fprintln(os.Stderr, "Usage: roonamp -host <ip> -port <port>")
+		fmt.Fprintln(os.Stderr, "   or: ROON_HOST=<ip> ROON_PORT=<port> roonamp")
+		os.Exit(1)
 	}
+
+	host := cfg.RoonHost
+	port := cfg.RoonPort
+	fmt.Printf("Connecting to %s:%s...\n", host, port)
 
 	token := config.LoadToken()
 

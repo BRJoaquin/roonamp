@@ -1,6 +1,7 @@
 package config
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 )
@@ -11,10 +12,24 @@ type Config struct {
 }
 
 func Load() Config {
-	return Config{
-		RoonHost: os.Getenv("ROON_HOST"),
-		RoonPort: os.Getenv("ROON_PORT"),
+	host := flag.String("host", "", "Roon Core host/IP address")
+	port := flag.String("port", "", "Roon Core HTTP port")
+	flag.Parse()
+
+	cfg := Config{
+		RoonHost: *host,
+		RoonPort: *port,
 	}
+
+	// Env vars as fallback if flags not set
+	if cfg.RoonHost == "" {
+		cfg.RoonHost = os.Getenv("ROON_HOST")
+	}
+	if cfg.RoonPort == "" {
+		cfg.RoonPort = os.Getenv("ROON_PORT")
+	}
+
+	return cfg
 }
 
 func TokenPath() string {
