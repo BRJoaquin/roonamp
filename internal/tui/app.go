@@ -117,14 +117,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, artCmd)
 		}
 		if z := m.currentZone(); z != nil {
-			// Sync progress bar to current seek position
-			if z.NowPlaying != nil && z.NowPlaying.Length > 0 && z.NowPlaying.SeekPosition != nil {
-				pct := float64(*z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
-				if pct > 1 {
-					pct = 1
-				}
-				cmds = append(cmds, m.progress.SetPercent(pct))
-			}
 			// Detect external volume changes
 			if len(z.Outputs) > 0 && z.Outputs[0].Volume != nil {
 				v := z.Outputs[0].Volume.Value
@@ -137,8 +129,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case seekTickMsg:
-		cmd := m.tickSeek()
-		return m, tea.Batch(seekTickCmd(), cmd)
+		m.tickSeek()
+		return m, seekTickCmd()
 
 	case animTickMsg:
 		m.tickAnim()
@@ -158,11 +150,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.browser.applyResult(msg)
 		return m, nil
-
-	case progress.FrameMsg:
-		model, cmd := m.progress.Update(msg)
-		m.progress = model.(progress.Model)
-		return m, cmd
 
 	}
 
@@ -486,20 +473,15 @@ func (m *Model) saveCurrentZone() {
 	}
 }
 
-func (m *Model) tickSeek() tea.Cmd {
+func (m *Model) tickSeek() {
 	z := m.currentZone()
 	if z == nil || z.NowPlaying == nil || z.State != "playing" {
-		return nil
+		return
 	}
 	if z.NowPlaying.SeekPosition == nil {
-		return nil
+		return
 	}
 	if *z.NowPlaying.SeekPosition < z.NowPlaying.Length {
 		*z.NowPlaying.SeekPosition++
 	}
-	pct := float64(*z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
-	if pct > 1 {
-		pct = 1
-	}
-	return m.progress.SetPercent(pct)
 }
