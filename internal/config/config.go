@@ -81,3 +81,30 @@ func SaveZone(zoneID string) error {
 	}
 	return os.WriteFile(path, []byte(zoneID), 0600)
 }
+
+func prefsPath() string {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "roonamp", "prefs")
+}
+
+func LoadShowArt() bool {
+	data, err := os.ReadFile(prefsPath())
+	if err != nil {
+		return true // default: show art
+	}
+	return string(data) != "0"
+}
+
+func SaveShowArt(show bool) {
+	path := prefsPath()
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+	val := "1"
+	if !show {
+		val = "0"
+	}
+	_ = os.WriteFile(path, []byte(val), 0600)
+}

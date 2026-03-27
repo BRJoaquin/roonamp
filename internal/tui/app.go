@@ -13,6 +13,13 @@ import (
 	"github.com/charmbracelet/harmonica"
 )
 
+// -- Views --
+
+const (
+	viewPlayer = iota
+	viewBrowser
+)
+
 // -- Messages --
 
 type zonesUpdatedMsg struct{ zones map[string]*roon.Zone }
@@ -31,8 +38,10 @@ type Model struct {
 	idx    int
 	width  int
 	height int
+	view   int
 
 	progress progress.Model
+	browser  browserModel
 
 	// Album art
 	artRendered    string
@@ -48,6 +57,10 @@ type Model struct {
 	volPulse    float64
 	volVel      float64
 
+	// Volume auto-hide
+	volLastTouch time.Time
+	volLastValue float64 // track external volume changes
+
 	savedZone string // zone ID to restore on startup
 	err       error
 }
@@ -58,9 +71,9 @@ func NewModel(client *roon.Client) Model {
 		progress: progress.New(
 			progress.WithScaledGradient(colorProgressA, colorProgressB),
 			progress.WithoutPercentage(),
-			progress.WithFillCharacters('=', '-'),
 		),
-		showArt:     true,
+		browser:     newBrowser(client),
+		showArt:     config.LoadShowArt(),
 		savedZone:   config.LoadZone(),
 		swipeSpring: harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.6),
 		volSpring:   harmonica.NewSpring(harmonica.FPS(60), 10.0, 0.4),
@@ -68,7 +81,16 @@ func NewModel(client *roon.Client) Model {
 }
 
 func (m Model) Init() tea.Cmd {
+	client := m.client
+	loadExisting := func() tea.Msg {
+		if zones := client.Zones(); len(zones) > 0 {
+			return zonesUpdatedMsg{zones: zones}
+		}
+		return nil
+	}
+
 	return tea.Batch(
+		loadExisting,
 		m.listenForZones(),
 		seekTickCmd(),
 		animTickCmd(),
@@ -83,19 +105,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.view == viewBrowser {
+			m.browser.setSize(msg.Width, msg.Height)
+		}
 		return m, nil
 
 	case zonesUpdatedMsg:
 		m.applyZones(msg.zones)
-		cmd := m.listenForZones()
+		cmds := []tea.Cmd{m.listenForZones()}
 		if artCmd := m.maybeUpdateArt(); artCmd != nil {
-			return m, tea.Batch(cmd, artCmd)
+			cmds = append(cmds, artCmd)
 		}
-		return m, cmd
+		if z := m.currentZone(); z != nil {
+			// Sync progress bar to current seek position
+			if z.NowPlaying != nil && z.NowPlaying.Length > 0 {
+				pct := float64(z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
+				if pct > 1 {
+					pct = 1
+				}
+				cmds = append(cmds, m.progress.SetPercent(pct))
+			}
+			// Detect external volume changes
+			if len(z.Outputs) > 0 && z.Outputs[0].Volume != nil {
+				v := z.Outputs[0].Volume.Value
+				if v != m.volLastValue {
+					m.volLastTouch = time.Now()
+					m.volLastValue = v
+				}
+			}
+		}
+		return m, tea.Batch(cmds...)
 
 	case seekTickMsg:
-		m.tickSeek()
-		return m, seekTickCmd()
+		cmd := m.tickSeek()
+		return m, tea.Batch(seekTickCmd(), cmd)
 
 	case animTickMsg:
 		m.tickAnim()
@@ -108,10 +151,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case browseResultMsg:
+		if msg.done {
+			m.view = viewPlayer
+			return m, nil
+		}
+		m.browser.applyResult(msg)
+		return m, nil
+
 	case progress.FrameMsg:
 		model, cmd := m.progress.Update(msg)
 		m.progress = model.(progress.Model)
 		return m, cmd
+
 	}
 
 	return m, nil
@@ -133,6 +185,13 @@ func (m Model) View() string {
 		)
 	}
 
+	if m.view == viewBrowser {
+		m.browser.setSize(w, h)
+		return m.browser.view()
+	}
+
+	volVisible := !m.volLastTouch.IsZero() && time.Since(m.volLastTouch) < 5*time.Second
+
 	return renderPlayer(playerState{
 		zones:       m.zones,
 		idx:         m.idx,
@@ -141,6 +200,7 @@ func (m Model) View() string {
 		prog:        m.progress,
 		swipeOffset: m.swipePos,
 		volPulse:    m.volPulse,
+		volVisible:  volVisible,
 		artRendered: m.artRendered,
 		showArt:     m.showArt,
 	})
@@ -149,13 +209,24 @@ func (m Model) View() string {
 // -- Key handling --
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Global quit
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+
+	// Browser view keys
+	if m.view == viewBrowser {
+		return m.handleBrowserKey(msg)
+	}
+
+	// Player view keys
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "q":
 		return m, tea.Quit
 
-	case "right", "l", ">", ".":
+	case "right", ">", ".":
 		return m, m.switchZone(1)
-	case "left", "h", "<", ",":
+	case "left", "<", ",":
 		return m, m.switchZone(-1)
 
 	case " ":
@@ -168,14 +239,90 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.controlCmd("stop")
 
 	case "+", "=":
-		m.volPulse, m.volVel = 5, 0
-		return m, m.volumeCmd(5)
+		m.volPulse, m.volVel = 1, 0
+		m.volLastTouch = time.Now()
+		return m, m.volumeCmd(1)
 	case "-":
-		m.volPulse, m.volVel = -5, 0
-		return m, m.volumeCmd(-5)
+		m.volPulse, m.volVel = -1, 0
+		m.volLastTouch = time.Now()
+		return m, m.volumeCmd(-1)
 
 	case "a":
 		m.showArt = !m.showArt
+		config.SaveShowArt(m.showArt)
+		return m, nil
+
+	case "b":
+		return m.openBrowser()
+	}
+
+	return m, nil
+}
+
+func (m Model) openBrowser() (tea.Model, tea.Cmd) {
+	z := m.currentZone()
+	if z == nil {
+		return m, nil
+	}
+	m.view = viewBrowser
+	m.browser.setSize(m.width, m.height)
+	cmd := m.browser.activate(z.ZoneID)
+	return m, cmd
+}
+
+func (m Model) handleBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b := &m.browser
+
+	// Filter input mode
+	if b.filtering {
+		switch msg.String() {
+		case "esc":
+			b.clearFilter()
+			return m, nil
+		case "enter":
+			b.filtering = false
+			return m, nil
+		case "backspace":
+			if len(b.filterBuf) > 0 {
+				b.filterBuf = b.filterBuf[:len(b.filterBuf)-1]
+				b.applyFilter()
+			}
+			return m, nil
+		default:
+			if r := msg.Runes; len(r) > 0 {
+				b.filterBuf += string(r)
+				b.applyFilter()
+			}
+			return m, nil
+		}
+	}
+
+	// Normal navigation
+	switch msg.String() {
+	case "j", "down":
+		b.moveDown()
+		return m, nil
+	case "k", "up":
+		b.moveUp()
+		return m, nil
+	case "enter", "l", "right":
+		cmd := b.selectCurrent()
+		if cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+	case "h", "left", "backspace":
+		if b.goBack() {
+			return m, nil
+		}
+		m.view = viewPlayer
+		return m, nil
+	case "/":
+		b.filtering = true
+		b.filterBuf = ""
+		return m, nil
+	case "esc", "q":
+		m.view = viewPlayer
 		return m, nil
 	}
 
@@ -339,12 +486,17 @@ func (m *Model) saveCurrentZone() {
 	}
 }
 
-func (m *Model) tickSeek() {
+func (m *Model) tickSeek() tea.Cmd {
 	z := m.currentZone()
 	if z == nil || z.NowPlaying == nil || z.State != "playing" {
-		return
+		return nil
 	}
 	if z.NowPlaying.SeekPosition < z.NowPlaying.Length {
 		z.NowPlaying.SeekPosition++
 	}
+	pct := float64(z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
+	if pct > 1 {
+		pct = 1
+	}
+	return m.progress.SetPercent(pct)
 }

@@ -110,6 +110,16 @@ func (c *Client) ImagePort() string {
 	return c.port
 }
 
+func (c *Client) Zones() map[string]*Zone {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snapshot := make(map[string]*Zone, len(c.zones))
+	for k, v := range c.zones {
+		snapshot[k] = v
+	}
+	return snapshot
+}
+
 func (c *Client) SubscribeZones() error {
 	req := ZonesSubscribeRequest{SubscriptionKey: "0"}
 	_, err := c.moo.Subscribe("com.roonlabs.transport:2/subscribe_zones", req, func(msg *MooMessage) {
@@ -143,8 +153,8 @@ func (c *Client) handleZoneUpdate(msg *MooMessage) {
 		z := resp.ZonesChanged[i]
 		c.zones[z.ZoneID] = &z
 	}
-	for i := range resp.ZonesRemoved {
-		delete(c.zones, resp.ZonesRemoved[i].ZoneID)
+	for _, id := range resp.ZonesRemoved {
+		delete(c.zones, id)
 	}
 
 	if c.OnZonesUpdated != nil {
@@ -174,6 +184,32 @@ func (c *Client) Seek(zoneID, how string, seconds int) error {
 	_, err := c.moo.Send("com.roonlabs.transport:2/seek",
 		SeekRequest{ZoneOrOutputID: zoneID, How: how, Seconds: seconds})
 	return err
+}
+
+// -- Browse --
+
+func (c *Client) Browse(req BrowseRequest) (*BrowseResponse, error) {
+	resp, err := c.moo.Send("com.roonlabs.browse:1/browse", req)
+	if err != nil {
+		return nil, fmt.Errorf("browse: %w", err)
+	}
+	var br BrowseResponse
+	if err := json.Unmarshal(resp.Body, &br); err != nil {
+		return nil, fmt.Errorf("unmarshal browse: %w", err)
+	}
+	return &br, nil
+}
+
+func (c *Client) Load(req LoadRequest) (*LoadResponse, error) {
+	resp, err := c.moo.Send("com.roonlabs.browse:1/load", req)
+	if err != nil {
+		return nil, fmt.Errorf("load: %w", err)
+	}
+	var lr LoadResponse
+	if err := json.Unmarshal(resp.Body, &lr); err != nil {
+		return nil, fmt.Errorf("unmarshal load: %w", err)
+	}
+	return &lr, nil
 }
 
 // -- Image --

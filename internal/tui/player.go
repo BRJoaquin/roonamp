@@ -12,29 +12,31 @@ import (
 )
 
 type playerState struct {
-	zones       []*roon.Zone
-	idx         int
-	width       int
-	height      int
-	prog        progress.Model
-	swipeOffset float64
-	volPulse    float64
-	artRendered string
-	showArt     bool
+	zones        []*roon.Zone
+	idx          int
+	width        int
+	height       int
+	contentWidth int
+	prog         progress.Model
+	swipeOffset  float64
+	volPulse     float64
+	volVisible   bool
+	artRendered  string
+	showArt      bool
 }
 
 func renderPlayer(ps playerState) string {
-	contentWidth := ps.width - 6 // border + padding
-	if contentWidth < 30 {
-		contentWidth = 30
+	ps.contentWidth = ps.width - 6 // border + padding
+	if ps.contentWidth < 30 {
+		ps.contentWidth = 30
 	}
-	ps.prog.Width = contentWidth - 16 // leave room for time display
+	ps.prog.Width = ps.contentWidth - 16 // leave room for time display
 
 	var sections []string
 
 	// -- Header bar --
 	sections = append(sections, renderHeader(ps.zones, ps.idx))
-	sections = append(sections, styleDim.Render(strings.Repeat("-", contentWidth)))
+	sections = append(sections, styleDim.Render(strings.Repeat("-", ps.contentWidth)))
 
 	if len(ps.zones) == 0 {
 		sections = append(sections, styleDim.Render("No zones available"))
@@ -53,13 +55,22 @@ func renderPlayer(ps playerState) string {
 	// -- Progress bar --
 	progLine := renderProgressBar(z, ps.prog)
 	if progLine != "" {
+		sections = append(sections, "")
 		sections = append(sections, progLine)
 	}
 
-	// -- Volume --
-	volLine := renderVolumeBar(z, contentWidth, ps.volPulse)
-	if volLine != "" {
-		sections = append(sections, volLine)
+	// -- Volume + settings on same line --
+	var statusParts []string
+	if ps.volVisible {
+		if volLine := renderVolume(z); volLine != "" {
+			statusParts = append(statusParts, volLine)
+		}
+	}
+	if infoLine := renderZoneInfo(z); infoLine != "" {
+		statusParts = append(statusParts, infoLine)
+	}
+	if len(statusParts) > 0 {
+		sections = append(sections, strings.Join(statusParts, styleSeparator.Render(" | ")))
 	}
 
 	// -- Zone switcher --
@@ -80,13 +91,19 @@ func renderPlayer(ps playerState) string {
 // -- Album art + track info --
 
 func renderArtAndInfo(z *roon.Zone, ps playerState) string {
-	info := renderNowPlaying(z, ps.swipeOffset)
-
+	// Calculate text width accounting for art
+	textWidth := ps.contentWidth
 	if ps.showArt && ps.artRendered != "" {
+		artWidth := lipgloss.Width(ps.artRendered) + 2 // art + gap
+		textWidth = ps.contentWidth - artWidth
+		if textWidth < 20 {
+			textWidth = 20
+		}
+		info := renderNowPlaying(z, ps.swipeOffset, textWidth)
 		return lipgloss.JoinHorizontal(lipgloss.Top, ps.artRendered, "  ", info)
 	}
 
-	return info
+	return renderNowPlaying(z, ps.swipeOffset, textWidth)
 }
 
 // -- Header --
@@ -108,7 +125,7 @@ func renderHeader(zones []*roon.Zone, idx int) string {
 
 // -- Now Playing --
 
-func renderNowPlaying(z *roon.Zone, offset float64) string {
+func renderNowPlaying(z *roon.Zone, offset float64, maxWidth int) string {
 	if z.NowPlaying == nil {
 		return "\n" + styleDim.Render("-- nothing playing --") + "\n"
 	}
@@ -122,11 +139,35 @@ func renderNowPlaying(z *roon.Zone, offset float64) string {
 		pad = strings.Repeat(" ", off)
 	}
 
-	track := pad + styleTrack.Render(np.ThreeLine.Line1)
-	artist := pad + styleArtist.Render(np.ThreeLine.Line2)
-	album := pad + styleAlbum.Render(np.ThreeLine.Line3)
+	track := pad + styleTrack.Render(truncate(np.ThreeLine.Line1, maxWidth))
+	artist := pad + styleArtist.Render(truncate(np.ThreeLine.Line2, maxWidth))
+	album := pad + styleAlbum.Render(truncate(np.ThreeLine.Line3, maxWidth))
 
-	return "\n" + lipgloss.JoinVertical(lipgloss.Left, track, artist, album) + "\n"
+	// Queue info
+	var info string
+	if z.QueueItemsRemaining > 0 {
+		info = styleDim.Render(fmt.Sprintf(
+			"%d tracks remaining (%s)",
+			z.QueueItemsRemaining, fmtTime(z.QueueTimeRemaining),
+		))
+	}
+
+	lines := []string{track, artist, album}
+	if info != "" {
+		lines = append(lines, info)
+	}
+
+	return "\n" + lipgloss.JoinVertical(lipgloss.Left, lines...) + "\n"
+}
+
+func truncate(s string, maxWidth int) string {
+	if len(s) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 3 {
+		return s[:maxWidth]
+	}
+	return s[:maxWidth-3] + "..."
 }
 
 // -- Progress --
@@ -137,12 +178,7 @@ func renderProgressBar(z *roon.Zone, prog progress.Model) string {
 	}
 
 	np := z.NowPlaying
-	pct := float64(np.SeekPosition) / float64(np.Length)
-	if pct > 1 {
-		pct = 1
-	}
-
-	bar := prog.ViewAs(pct)
+	bar := prog.View()
 	timeStr := styleTime.Render(
 		fmt.Sprintf("  %s / %s", fmtTime(np.SeekPosition), fmtTime(np.Length)),
 	)
@@ -152,44 +188,36 @@ func renderProgressBar(z *roon.Zone, prog progress.Model) string {
 
 // -- Volume --
 
-func renderVolumeBar(z *roon.Zone, width int, pulse float64) string {
+func renderVolume(z *roon.Zone) string {
 	if len(z.Outputs) == 0 || z.Outputs[0].Volume == nil {
 		return ""
 	}
-
 	v := z.Outputs[0].Volume
-
-	label := "VOL"
 	if v.IsMuted {
-		label = "MUT"
+		return styleVolLabel.Render("VOL MUTED")
+	}
+	pct := int((v.Value - v.Min) / (v.Max - v.Min) * 100)
+	return styleVolLabel.Render(fmt.Sprintf("VOL %d%%", pct))
+}
+
+// -- Zone info --
+
+func renderZoneInfo(z *roon.Zone) string {
+	var parts []string
+
+	if z.Settings != nil {
+		if z.Settings.Shuffle {
+			parts = append(parts, "shuffle")
+		}
+		if z.Settings.Loop != "" && z.Settings.Loop != "disabled" {
+			parts = append(parts, "loop:"+z.Settings.Loop)
+		}
 	}
 
-	barWidth := width - 12
-	if barWidth < 10 {
-		barWidth = 10
+	if len(parts) == 0 {
+		return ""
 	}
-
-	pct := (v.Value - v.Min) / (v.Max - v.Min)
-	filled := int(pct * float64(barWidth))
-
-	// Pulse glow from harmonica spring
-	pulseExtra := int(math.Abs(pulse) * 3)
-	if filled+pulseExtra > barWidth {
-		pulseExtra = barWidth - filled
-	}
-	if pulseExtra < 0 {
-		pulseExtra = 0
-	}
-
-	bar := styleVolFilled.Render(strings.Repeat("#", filled))
-	if pulseExtra > 0 {
-		bar += styleVolLabel.Render(strings.Repeat(":", pulseExtra))
-	}
-	bar += styleVolEmpty.Render(strings.Repeat(".", barWidth-filled-pulseExtra))
-
-	valStr := fmt.Sprintf("%.0f", v.Value)
-
-	return styleVolLabel.Render(label) + " [" + bar + "] " + styleVolLabel.Render(valStr)
+	return styleDim.Render(strings.Join(parts, " | "))
 }
 
 // -- Zone switcher --
@@ -221,6 +249,7 @@ func renderHelpBar() string {
 		"[p/n] prev/next",
 		"[-/+] vol",
 		"[</>] zone",
+		"[b] browse",
 		"[a] art",
 		"[q] quit",
 	}

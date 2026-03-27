@@ -39,10 +39,18 @@ type LineInfo struct {
 }
 
 type Output struct {
-	OutputID    string  `json:"output_id"`
-	DisplayName string  `json:"display_name"`
-	ZoneID      string  `json:"zone_id"`
-	Volume      *Volume `json:"volume,omitempty"`
+	OutputID       string          `json:"output_id"`
+	DisplayName    string          `json:"display_name"`
+	ZoneID         string          `json:"zone_id"`
+	Volume         *Volume         `json:"volume,omitempty"`
+	SourceControls []SourceControl `json:"source_controls,omitempty"`
+}
+
+type SourceControl struct {
+	ControlKey      string `json:"control_key"`
+	DisplayName     string `json:"display_name"`
+	SupportsStandby bool   `json:"supports_standby"`
+	Status          string `json:"status"`
 }
 
 type Volume struct {
@@ -89,10 +97,10 @@ type ZonesSubscribeRequest struct {
 }
 
 type ZonesResponse struct {
-	Zones        []Zone `json:"zones,omitempty"`
-	ZonesChanged []Zone `json:"zones_changed,omitempty"`
-	ZonesRemoved []Zone `json:"zones_removed,omitempty"`
-	ZonesAdded   []Zone `json:"zones_added,omitempty"`
+	Zones        []Zone   `json:"zones,omitempty"`
+	ZonesChanged []Zone   `json:"zones_changed,omitempty"`
+	ZonesRemoved []string `json:"zones_removed,omitempty"`
+	ZonesAdded   []Zone   `json:"zones_added,omitempty"`
 }
 
 // Transport control
@@ -112,6 +120,50 @@ type VolumeRequest struct {
 	OutputID string  `json:"output_id"`
 	How      string  `json:"how"`
 	Value    float64 `json:"value"`
+}
+
+// Browse API
+
+type BrowseRequest struct {
+	Hierarchy        string  `json:"hierarchy"`
+	ZoneOrOutputID   string  `json:"zone_or_output_id,omitempty"`
+	ItemKey          *string `json:"item_key,omitempty"`
+	Input            string  `json:"input,omitempty"`
+	PopAll           bool    `json:"pop_all,omitempty"`
+	SetDisplayOffset int     `json:"set_display_offset,omitempty"`
+}
+
+type BrowseResponse struct {
+	Action string    `json:"action"`
+	List   *ListInfo `json:"list,omitempty"`
+}
+
+type ListInfo struct {
+	Title   string `json:"title"`
+	Count   int    `json:"count"`
+	Level   int    `json:"level"`
+	Hint    string `json:"hint,omitempty"`
+}
+
+type LoadRequest struct {
+	Hierarchy       string `json:"hierarchy"`
+	Offset          int    `json:"offset"`
+	SetDisplayOffset int   `json:"set_display_offset,omitempty"`
+	Count           int    `json:"count"`
+}
+
+type LoadResponse struct {
+	Items  []BrowseItem `json:"items"`
+	Offset int          `json:"offset"`
+	List   *ListInfo    `json:"list,omitempty"`
+}
+
+type BrowseItem struct {
+	Title    string  `json:"title"`
+	Subtitle string  `json:"subtitle,omitempty"`
+	ItemKey  *string `json:"item_key,omitempty"`
+	ImageKey string  `json:"image_key,omitempty"`
+	Hint     string  `json:"hint,omitempty"`
 }
 
 // SOOD discovery

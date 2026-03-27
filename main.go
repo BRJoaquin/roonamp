@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 
 	"roonamp/internal/config"
@@ -12,6 +14,10 @@ import (
 )
 
 func main() {
+	// Discard log output so it doesn't corrupt the TUI.
+	// Use -debug flag to log to ~/.config/roonamp/debug.log instead.
+	log.SetOutput(io.Discard)
+
 	cfg := config.Load()
 
 	if cfg.RoonHost == "" || cfg.RoonPort == "" {
