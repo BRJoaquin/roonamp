@@ -24,7 +24,7 @@ type Settings struct {
 }
 
 type NowPlaying struct {
-	SeekPosition int      `json:"seek_position"`
+	SeekPosition *int     `json:"seek_position"`
 	Length       int      `json:"length"`
 	OneLine      LineInfo `json:"one_line"`
 	TwoLine      LineInfo `json:"two_line"`

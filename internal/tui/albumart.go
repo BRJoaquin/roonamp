@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -24,7 +23,7 @@ const halfBlock = "\u2580" // ▀ upper half block
 
 var imageHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
-// FetchAndRenderArt tries HTTP first, then MOO fallback.
+// FetchAndRenderArt fetches album art via HTTP from the Roon Core.
 func FetchAndRenderArt(client *roon.Client, imageKey string) (string, error) {
 	if imageKey == "" {
 		return renderPlaceholder(), nil
@@ -33,11 +32,10 @@ func FetchAndRenderArt(client *roon.Client, imageKey string) (string, error) {
 	pixW := artWidth * 8
 	pixH := artHeight * 8
 
-	// Try HTTP endpoint first (Roon Core serves images here)
-	img, err := fetchImageHTTP(client.Host(), client.ImagePort(), imageKey, pixW, pixH)
-	if err != nil {
-		// Fallback: try MOO protocol
-		img, err = fetchImageMOO(client, imageKey, pixW, pixH)
+	// Try the WebSocket port first, then the HTTP port from register
+	img, err := fetchImageHTTP(client.Host(), client.Port(), imageKey, pixW, pixH)
+	if err != nil && client.ImagePort() != client.Port() {
+		img, err = fetchImageHTTP(client.Host(), client.ImagePort(), imageKey, pixW, pixH)
 	}
 	if err != nil {
 		return renderPlaceholder(), err
@@ -65,32 +63,6 @@ func fetchImageHTTP(host, port, imageKey string, w, h int) (image.Image, error) 
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 	return img, nil
-}
-
-func fetchImageMOO(client *roon.Client, imageKey string, w, h int) (image.Image, error) {
-	type result struct {
-		data []byte
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		data, err := client.GetImage(imageKey, w, h)
-		ch <- result{data, err}
-	}()
-
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			return nil, r.err
-		}
-		img, _, err := image.Decode(bytes.NewReader(r.data))
-		if err != nil {
-			return nil, fmt.Errorf("decode moo image: %w", err)
-		}
-		return img, nil
-	case <-time.After(5 * time.Second):
-		return nil, fmt.Errorf("moo image timeout")
-	}
 }
 
 // renderImage converts an image to terminal half-block art.

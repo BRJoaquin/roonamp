@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -53,8 +54,15 @@ func (m *MooConn) Send(servicePath string, body interface{}) (*MooMessage, error
 		return nil, err
 	}
 
-	msg := <-ch
-	return msg, nil
+	select {
+	case msg := <-ch:
+		return msg, nil
+	case <-time.After(30 * time.Second):
+		m.handlerMu.Lock()
+		delete(m.handlers, id)
+		m.handlerMu.Unlock()
+		return nil, fmt.Errorf("moo request timeout: %s", servicePath)
+	}
 }
 
 // Subscribe sends a MOO REQUEST and calls handler on every CONTINUE.

@@ -74,8 +74,8 @@ func (c *Client) Register() (*RegisterResponse, error) {
 		DisplayVersion:   "0.1.0",
 		Publisher:        "BrokenRubik",
 		Email:            "dev@brokenrubik.com",
-		RequiredServices: []string{"com.roonlabs.transport:2"},
-		OptionalServices: []string{"com.roonlabs.browse:1", "com.roonlabs.image:1"},
+		RequiredServices: []string{"com.roonlabs.transport:2", "com.roonlabs.browse:1", "com.roonlabs.image:1"},
+		OptionalServices: []string{},
 		ProvidedServices: []string{"com.roonlabs.ping:1"},
 		Token:            c.token,
 	}
@@ -101,6 +101,7 @@ func (c *Client) Register() (*RegisterResponse, error) {
 
 func (c *Client) Token() string { return c.token }
 func (c *Client) Host() string  { return c.host }
+func (c *Client) Port() string  { return c.port }
 
 // ImagePort returns the HTTP port for image requests (may differ from WS port).
 func (c *Client) ImagePort() string {

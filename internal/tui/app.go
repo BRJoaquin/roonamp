@@ -118,8 +118,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if z := m.currentZone(); z != nil {
 			// Sync progress bar to current seek position
-			if z.NowPlaying != nil && z.NowPlaying.Length > 0 {
-				pct := float64(z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
+			if z.NowPlaying != nil && z.NowPlaying.Length > 0 && z.NowPlaying.SeekPosition != nil {
+				pct := float64(*z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
 				if pct > 1 {
 					pct = 1
 				}
@@ -491,10 +491,13 @@ func (m *Model) tickSeek() tea.Cmd {
 	if z == nil || z.NowPlaying == nil || z.State != "playing" {
 		return nil
 	}
-	if z.NowPlaying.SeekPosition < z.NowPlaying.Length {
-		z.NowPlaying.SeekPosition++
+	if z.NowPlaying.SeekPosition == nil {
+		return nil
 	}
-	pct := float64(z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
+	if *z.NowPlaying.SeekPosition < z.NowPlaying.Length {
+		*z.NowPlaying.SeekPosition++
+	}
+	pct := float64(*z.NowPlaying.SeekPosition) / float64(z.NowPlaying.Length)
 	if pct > 1 {
 		pct = 1
 	}
