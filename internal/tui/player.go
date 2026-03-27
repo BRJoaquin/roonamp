@@ -178,12 +178,17 @@ func renderProgressBar(z *roon.Zone, prog progress.Model) string {
 	}
 
 	np := z.NowPlaying
-	bar := prog.View()
-
 	seekPos := 0
 	if np.SeekPosition != nil {
 		seekPos = *np.SeekPosition
 	}
+
+	pct := float64(seekPos) / float64(np.Length)
+	if pct > 1 {
+		pct = 1
+	}
+	bar := prog.ViewAs(pct)
+
 	timeStr := styleTime.Render(
 		fmt.Sprintf("  %s / %s", fmtTime(seekPos), fmtTime(np.Length)),
 	)
