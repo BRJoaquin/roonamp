@@ -6,21 +6,47 @@ import (
 	"log"
 	"net/url"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type Client struct {
-	moo      *MooConn
 	host     string
 	port     string
 	httpPort string // from register response, may differ from ws port
 	token    string
 
+	connMu sync.RWMutex
+	moo    *MooConn
+
+	closing      atomic.Bool
+	reconnecting atomic.Bool
+	connected    atomic.Bool
+
 	mu    sync.RWMutex
 	zones map[string]*Zone
 
 	OnZonesUpdated func(zones map[string]*Zone)
+}
+
+// Connected reports whether the WebSocket link is currently up. It flips false
+// while the client is reconnecting after a dropped connection.
+func (c *Client) Connected() bool { return c.connected.Load() }
+
+// conn returns the current connection under a read lock. It may be replaced
+// during reconnection, so callers should fetch it fresh per operation.
+func (c *Client) conn() *MooConn {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.moo
+}
+
+func (c *Client) setConn(m *MooConn) {
+	c.connMu.Lock()
+	c.moo = m
+	c.connMu.Unlock()
 }
 
 func NewClient(host, port, token string) *Client {
@@ -33,30 +59,100 @@ func NewClient(host, port, token string) *Client {
 }
 
 func (c *Client) Connect() error {
+	if err := c.dial(); err != nil {
+		return err
+	}
+	go c.runReadLoop(c.conn())
+	return nil
+}
+
+// dial opens a fresh WebSocket and installs it as the current connection,
+// including the ping responder for Roon's keepalive pings.
+func (c *Client) dial() error {
 	u := url.URL{Scheme: "ws", Host: c.host + ":" + c.port, Path: "/api"}
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("websocket dial %s: %w", u.String(), err)
 	}
 
-	c.moo = NewMooConn(ws)
-	c.moo.onRequest = func(msg *MooMessage) {
+	moo := NewMooConn(ws)
+	moo.onRequest = func(msg *MooMessage) {
 		if msg.Name == "com.roonlabs.ping:1/ping" {
-			c.moo.SendResponse(msg.RequestID, "Success")
+			moo.SendResponse(msg.RequestID, "Success")
 		}
 	}
+	c.setConn(moo)
+	c.connected.Store(true)
+	return nil
+}
 
-	go func() {
-		if err := c.moo.ReadLoop(); err != nil {
-			log.Printf("read loop ended: %v", err)
+// runReadLoop owns one connection's read loop. When it ends unexpectedly it
+// kicks off reconnection. Exactly one read loop is active per connection.
+func (c *Client) runReadLoop(moo *MooConn) {
+	err := moo.ReadLoop()
+	log.Printf("read loop ended: %v", err)
+	c.connected.Store(false)
+
+	if c.closing.Load() {
+		return
+	}
+	// Guard against multiple concurrent reconnect drivers.
+	if c.reconnecting.CompareAndSwap(false, true) {
+		c.reconnectLoop()
+	}
+}
+
+// reconnectLoop re-dials, re-registers, and re-subscribes with exponential
+// backoff until it succeeds or the client is closing. Re-subscribing fires
+// OnZonesUpdated, which refreshes the UI without a manual restart.
+func (c *Client) reconnectLoop() {
+	defer c.reconnecting.Store(false)
+
+	backoff := time.Second
+	for {
+		if c.closing.Load() {
+			return
 		}
-	}()
+		time.Sleep(backoff)
+		if c.closing.Load() {
+			return
+		}
 
+		if err := c.reestablish(); err != nil {
+			log.Printf("reconnect attempt failed: %v", err)
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+
+		log.Printf("reconnected to Roon Core")
+		return
+	}
+}
+
+// reestablish performs one full reconnect: dial, start the read loop, then
+// re-register (with the saved token) and re-subscribe to zones.
+func (c *Client) reestablish() error {
+	if err := c.dial(); err != nil {
+		return err
+	}
+	moo := c.conn()
+	go c.runReadLoop(moo)
+
+	if _, err := c.Register(); err != nil {
+		moo.Close()
+		return fmt.Errorf("re-register: %w", err)
+	}
+	if err := c.SubscribeZones(); err != nil {
+		moo.Close()
+		return fmt.Errorf("re-subscribe zones: %w", err)
+	}
 	return nil
 }
 
 func (c *Client) GetInfo() (*InfoResponse, error) {
-	resp, err := c.moo.Send("com.roonlabs.registry:1/info", nil)
+	resp, err := c.conn().Send("com.roonlabs.registry:1/info", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +176,7 @@ func (c *Client) Register() (*RegisterResponse, error) {
 		Token:            c.token,
 	}
 
-	resp, err := c.moo.Subscribe("com.roonlabs.registry:1/register", req, func(msg *MooMessage) {
+	resp, err := c.conn().Subscribe("com.roonlabs.registry:1/register", req, func(msg *MooMessage) {
 		log.Printf("register update: %s", string(msg.Body))
 	})
 	if err != nil {
@@ -123,7 +219,7 @@ func (c *Client) Zones() map[string]*Zone {
 
 func (c *Client) SubscribeZones() error {
 	req := ZonesSubscribeRequest{SubscriptionKey: "0"}
-	_, err := c.moo.Subscribe("com.roonlabs.transport:2/subscribe_zones", req, func(msg *MooMessage) {
+	_, err := c.conn().Subscribe("com.roonlabs.transport:2/subscribe_zones", req, func(msg *MooMessage) {
 		c.handleZoneUpdate(msg)
 	})
 	return err
@@ -170,19 +266,19 @@ func (c *Client) handleZoneUpdate(msg *MooMessage) {
 // -- Transport controls --
 
 func (c *Client) Control(zoneID, control string) error {
-	_, err := c.moo.Send("com.roonlabs.transport:2/control",
+	_, err := c.conn().Send("com.roonlabs.transport:2/control",
 		ControlRequest{ZoneOrOutputID: zoneID, Control: control})
 	return err
 }
 
 func (c *Client) ChangeVolume(outputID, how string, value float64) error {
-	_, err := c.moo.Send("com.roonlabs.transport:2/change_volume",
+	_, err := c.conn().Send("com.roonlabs.transport:2/change_volume",
 		VolumeRequest{OutputID: outputID, How: how, Value: value})
 	return err
 }
 
 func (c *Client) Seek(zoneID, how string, seconds int) error {
-	_, err := c.moo.Send("com.roonlabs.transport:2/seek",
+	_, err := c.conn().Send("com.roonlabs.transport:2/seek",
 		SeekRequest{ZoneOrOutputID: zoneID, How: how, Seconds: seconds})
 	return err
 }
@@ -190,7 +286,7 @@ func (c *Client) Seek(zoneID, how string, seconds int) error {
 // -- Browse --
 
 func (c *Client) Browse(req BrowseRequest) (*BrowseResponse, error) {
-	resp, err := c.moo.Send("com.roonlabs.browse:1/browse", req)
+	resp, err := c.conn().Send("com.roonlabs.browse:1/browse", req)
 	if err != nil {
 		return nil, fmt.Errorf("browse: %w", err)
 	}
@@ -202,7 +298,7 @@ func (c *Client) Browse(req BrowseRequest) (*BrowseResponse, error) {
 }
 
 func (c *Client) Load(req LoadRequest) (*LoadResponse, error) {
-	resp, err := c.moo.Send("com.roonlabs.browse:1/load", req)
+	resp, err := c.conn().Send("com.roonlabs.browse:1/load", req)
 	if err != nil {
 		return nil, fmt.Errorf("load: %w", err)
 	}
@@ -223,7 +319,7 @@ func (c *Client) GetImage(imageKey string, width, height int) ([]byte, error) {
 		"height":    height,
 		"format":    "image/jpeg",
 	}
-	resp, err := c.moo.Send("com.roonlabs.image:1/get_image", req)
+	resp, err := c.conn().Send("com.roonlabs.image:1/get_image", req)
 	if err != nil {
 		return nil, fmt.Errorf("get_image: %w", err)
 	}
@@ -237,8 +333,9 @@ func (c *Client) GetImage(imageKey string, width, height int) ([]byte, error) {
 }
 
 func (c *Client) Close() error {
-	if c.moo != nil {
-		return c.moo.Close()
+	c.closing.Store(true)
+	if moo := c.conn(); moo != nil {
+		return moo.Close()
 	}
 	return nil
 }

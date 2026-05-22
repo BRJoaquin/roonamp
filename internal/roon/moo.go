@@ -13,6 +13,17 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	// pongWait is how long ReadLoop waits for any frame before giving up.
+	// Roon pings registered extensions every ~10s, so silence this long
+	// means the link is dead (network change, Core restart, sleep/wake).
+	pongWait = 30 * time.Second
+	// pingPeriod must be < pongWait so we probe before the deadline fires.
+	pingPeriod = 10 * time.Second
+	// writeWait bounds a single write so a half-dead socket fails fast.
+	writeWait = 10 * time.Second
+)
+
 // MooConn handles MOO protocol messaging over WebSocket.
 type MooConn struct {
 	ws          *websocket.Conn
@@ -110,6 +121,7 @@ func (m *MooConn) writeRequest(id int64, servicePath string, body interface{}) e
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ws.SetWriteDeadline(time.Now().Add(writeWait))
 	return m.ws.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 }
 
@@ -118,16 +130,47 @@ func (m *MooConn) SendResponse(requestID int64, status string) error {
 	msg := fmt.Sprintf("MOO/1 COMPLETE %s\nRequest-Id: %d\n\n", status, requestID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ws.SetWriteDeadline(time.Now().Add(writeWait))
 	return m.ws.WriteMessage(websocket.BinaryMessage, []byte(msg))
 }
 
-// ReadLoop reads messages from the WebSocket and dispatches them.
+// pingLoop sends WebSocket ping frames so a dead peer is noticed even if Roon
+// stops sending its own pings. Stops when the connection is closed.
+func (m *MooConn) pingLoop(done <-chan struct{}) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			// WriteControl is safe to call concurrently with other writes.
+			if err := m.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// ReadLoop reads messages from the WebSocket and dispatches them. It returns a
+// non-nil error when the connection dies so the caller can reconnect.
 func (m *MooConn) ReadLoop() error {
+	// Any received frame (including Roon's pings and pong replies) proves the
+	// link is alive and pushes the deadline forward.
+	resetDeadline := func() { m.ws.SetReadDeadline(time.Now().Add(pongWait)) }
+	resetDeadline()
+	m.ws.SetPongHandler(func(string) error { resetDeadline(); return nil })
+
+	done := make(chan struct{})
+	defer close(done)
+	go m.pingLoop(done)
+
 	for {
 		_, data, err := m.ws.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("ws read: %w", err)
 		}
+		resetDeadline()
 
 		msg, err := parseMooMessage(data)
 		if err != nil {

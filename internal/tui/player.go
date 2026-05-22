@@ -23,6 +23,7 @@ type playerState struct {
 	volVisible   bool
 	artRendered  string
 	showArt      bool
+	connected    bool
 }
 
 func renderPlayer(ps playerState) string {
@@ -35,7 +36,7 @@ func renderPlayer(ps playerState) string {
 	var sections []string
 
 	// -- Header bar --
-	sections = append(sections, renderHeader(ps.zones, ps.idx))
+	sections = append(sections, renderHeader(ps.zones, ps.idx, ps.connected))
 	sections = append(sections, styleDim.Render(strings.Repeat("-", ps.contentWidth)))
 
 	if len(ps.zones) == 0 {
@@ -108,19 +109,24 @@ func renderArtAndInfo(z *roon.Zone, ps playerState) string {
 
 // -- Header --
 
-func renderHeader(zones []*roon.Zone, idx int) string {
+func renderHeader(zones []*roon.Zone, idx int, connected bool) string {
 	title := styleHeader.Render("roonamp")
 	sep := styleSeparator.Render(" | ")
 
+	suffix := ""
+	if !connected {
+		suffix = sep + styleStatusStopped.Render("[reconnecting...]")
+	}
+
 	if len(zones) == 0 {
-		return title + sep + styleDim.Render("--")
+		return title + sep + styleDim.Render("--") + suffix
 	}
 
 	z := zones[clamp(idx, 0, len(zones)-1)]
 	zone := styleZoneActive.Render(z.DisplayName)
 	state := stateIcon(z.State) + " " + stateLabel(z.State)
 
-	return title + sep + zone + sep + state
+	return title + sep + zone + sep + state + suffix
 }
 
 // -- Now Playing --

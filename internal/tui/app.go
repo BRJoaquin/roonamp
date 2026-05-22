@@ -62,6 +62,7 @@ type Model struct {
 	volLastValue float64 // track external volume changes
 
 	savedZone string // zone ID to restore on startup
+	connected bool   // WebSocket link state, refreshed on each seek tick
 	err       error
 }
 
@@ -75,6 +76,7 @@ func NewModel(client *roon.Client) Model {
 		browser:     newBrowser(client),
 		showArt:     config.LoadShowArt(),
 		savedZone:   config.LoadZone(),
+		connected:   true,
 		swipeSpring: harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.6),
 		volSpring:   harmonica.NewSpring(harmonica.FPS(60), 10.0, 0.4),
 	}
@@ -190,6 +192,7 @@ func (m Model) View() string {
 		volVisible:  volVisible,
 		artRendered: m.artRendered,
 		showArt:     m.showArt,
+		connected:   m.connected,
 	})
 }
 
@@ -474,6 +477,8 @@ func (m *Model) saveCurrentZone() {
 }
 
 func (m *Model) tickSeek() {
+	m.connected = m.client.Connected()
+
 	z := m.currentZone()
 	if z == nil || z.NowPlaying == nil || z.State != "playing" {
 		return

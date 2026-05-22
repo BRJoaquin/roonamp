@@ -1,8 +1,26 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # roonamp -- Claude Code Task Specification
 
 ## What this is
 
 A terminal TUI music controller for Roon, written in Go using the Charm ecosystem (Bubble Tea, Lip Gloss, Bubbles). It communicates directly with the Roon Core over WebSocket using the native MOO protocol. No Node.js bridge, no HTTP proxy -- pure Go talking to Roon.
+
+## Commands
+
+```bash
+go build -o roonamp .          # build the static binary
+go run . -host <ip> -port <port>   # build and run against a Roon Core
+go vet ./...                   # static analysis
+gofmt -l -w .                  # format (CI/standard Go formatting)
+```
+
+- Requires Go 1.26+ (see `go.mod`).
+- There is no test suite, no Makefile, and no linter config -- `go vet` and `gofmt` are the only checks.
+- Running needs a reachable Roon Core: pass `-host`/`-port` or set `ROON_HOST`/`ROON_PORT` (flags win). The HTTP port varies per install (commonly 9100/9150/9200/9330).
+- The binary writes nothing to stdout once the TUI starts; `log` output is discarded (see "Logging" below) to avoid corrupting the alt-screen.
 
 ## Constraints
 
@@ -20,6 +38,28 @@ A terminal TUI music controller for Roon, written in Go using the Charm ecosyste
 │   Bubble Tea    │   ws://{ip}:{port}/api     │           │
 └─────────────────┘   MOO protocol messages    └───────────┘
 ```
+
+### Startup sequence (main.go)
+
+All network setup is **synchronous and blocking, before the TUI launches**: `Connect` -> `GetInfo` -> `Register` -> `SubscribeZones`, each failing fast to stderr. Only after zones are subscribed does `tui.NewModel(client)` run inside `tea.NewProgram(..., WithAltScreen())`. The Roon `Client` is fully connected and registered by the time any Bubble Tea code sees it.
+
+### Concurrency model (the part that spans files)
+
+There are two concurrent worlds and one bridge between them:
+
+1. **MOO/WebSocket goroutine** (`roon/moo.go`): `MooConn.ReadLoop()` runs in a background goroutine started by `Client.Connect`. It parses every incoming frame and dispatches by `Request-Id`: REQUEST/COMPLETE replies go to a per-request reply channel registered in `handlers`; subscription CONTINUE frames are routed to the handler registered via `Subscribe`. `Client.handleZoneUpdate` is that handler for zones -- it mutates the client's zone map under a mutex and then invokes the `Client.OnZonesUpdated` callback.
+
+2. **Bubble Tea event loop** (`tui/app.go`): a single `Model` drives both the player and browser views (a `view` field routes `Update`/`View`). State changes only ever happen inside `Update`.
+
+3. **The bridge** (`Model.listenForZones`): a `tea.Cmd` that sets `client.OnZonesUpdated` to push into a channel, then blocks on that channel and returns the result as a `zonesUpdatedMsg`. Each time `Update` handles a `zonesUpdatedMsg` it re-issues `listenForZones()` to wait for the next push. This is how asynchronous Roon push updates become serialized Bubble Tea messages -- **do not touch zone state from the callback or any goroutine; convert it to a `Msg` and handle it in `Update`.**
+
+Synchronous request/response calls (`Control`, `ChangeVolume`, `Seek`, `Browse`, `Load`) are issued from within `tea.Cmd` closures (e.g. `controlCmd`, `volumeCmd`) so the blocking WebSocket round-trip happens off the UI loop.
+
+Two local `tea.Tick` loops also feed `Update`: `seekTickCmd` (1s, advances the displayed seek position between server updates) and `animTickCmd` (60fps, drives the harmonica spring animations for the zone-swipe and volume-pulse effects).
+
+### Logging
+
+`main.go` sets `log.SetOutput(io.Discard)` so stray logging cannot corrupt the alt-screen TUI. A `-debug` flag intended to redirect logs to `~/.config/roonamp/debug.log` is referenced in a comment but **not currently implemented** in `config.go`.
 
 ## Project structure
 
