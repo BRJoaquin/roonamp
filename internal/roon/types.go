@@ -131,6 +131,7 @@ type BrowseRequest struct {
 	Input            string  `json:"input,omitempty"`
 	PopAll           bool    `json:"pop_all,omitempty"`
 	SetDisplayOffset int     `json:"set_display_offset,omitempty"`
+	MultiSessionKey  string  `json:"multi_session_key,omitempty"`
 }
 
 type BrowseResponse struct {
@@ -139,17 +140,18 @@ type BrowseResponse struct {
 }
 
 type ListInfo struct {
-	Title   string `json:"title"`
-	Count   int    `json:"count"`
-	Level   int    `json:"level"`
-	Hint    string `json:"hint,omitempty"`
+	Title string `json:"title"`
+	Count int    `json:"count"`
+	Level int    `json:"level"`
+	Hint  string `json:"hint,omitempty"`
 }
 
 type LoadRequest struct {
-	Hierarchy       string `json:"hierarchy"`
-	Offset          int    `json:"offset"`
-	SetDisplayOffset int   `json:"set_display_offset,omitempty"`
-	Count           int    `json:"count"`
+	Hierarchy        string `json:"hierarchy"`
+	Offset           int    `json:"offset"`
+	SetDisplayOffset int    `json:"set_display_offset,omitempty"`
+	Count            int    `json:"count"`
+	MultiSessionKey  string `json:"multi_session_key,omitempty"`
 }
 
 type LoadResponse struct {
@@ -159,11 +161,19 @@ type LoadResponse struct {
 }
 
 type BrowseItem struct {
-	Title    string  `json:"title"`
-	Subtitle string  `json:"subtitle,omitempty"`
-	ItemKey  *string `json:"item_key,omitempty"`
-	ImageKey string  `json:"image_key,omitempty"`
-	Hint     string  `json:"hint,omitempty"`
+	Title       string       `json:"title"`
+	Subtitle    string       `json:"subtitle,omitempty"`
+	ItemKey     *string      `json:"item_key,omitempty"`
+	ImageKey    string       `json:"image_key,omitempty"`
+	Hint        string       `json:"hint,omitempty"`
+	InputPrompt *InputPrompt `json:"input_prompt,omitempty"`
+}
+
+type InputPrompt struct {
+	Prompt     string `json:"prompt"`
+	Action     string `json:"action"`
+	Value      string `json:"value,omitempty"`
+	IsPassword bool   `json:"is_password,omitempty"`
 }
 
 // SOOD discovery

@@ -53,6 +53,8 @@ var (
 	styleStatusPlaying = lipgloss.NewStyle().Foreground(colorPlaying).Bold(true)
 	styleStatusPaused  = lipgloss.NewStyle().Foreground(colorPaused).Bold(true)
 	styleStatusStopped = lipgloss.NewStyle().Foreground(colorStopped).Bold(true)
+
+	styleError = lipgloss.NewStyle().Foreground(colorStopped)
 )
 
 func stateIcon(state string) string {

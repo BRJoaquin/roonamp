@@ -3,6 +3,7 @@ package tui
 import (
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"roonamp/internal/config"
@@ -263,6 +264,11 @@ func (m Model) openBrowser() (tea.Model, tea.Cmd) {
 func (m Model) handleBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	b := &m.browser
 
+	// Any key dismisses a transient status (e.g. "search failed: ...").
+	if b.statusMsg != "" {
+		b.statusMsg = ""
+	}
+
 	// Filter input mode
 	if b.filtering {
 		switch msg.String() {
@@ -282,6 +288,48 @@ func (m Model) handleBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if r := msg.Runes; len(r) > 0 {
 				b.filterBuf += string(r)
 				b.applyFilter()
+			}
+			return m, nil
+		}
+	}
+
+	// Search input mode (global library search)
+	if b.searching {
+		switch msg.String() {
+		case "esc":
+			b.searching = false
+			b.searchBuf = ""
+			return m, nil
+		case "enter":
+			q := strings.TrimSpace(b.searchBuf)
+			b.searching = false
+			b.searchBuf = ""
+			if q == "" {
+				return m, nil
+			}
+			// Snapshot pre-search state so a failure restores the user
+			// to exactly where they were. applyResult clears the stack
+			// on success since search results are a fresh root.
+			b.searchSnapshot = &browseSnapshot{
+				items:   b.items,
+				title:   b.title,
+				cursor:  b.cursor,
+				offset:  b.offset,
+				stack:   b.stack,
+				session: b.session,
+			}
+			b.clearFilter()
+			b.loading = true
+			b.title = "Searching..."
+			return m, b.searchCmd(q)
+		case "backspace":
+			if len(b.searchBuf) > 0 {
+				b.searchBuf = b.searchBuf[:len(b.searchBuf)-1]
+			}
+			return m, nil
+		default:
+			if r := msg.Runes; len(r) > 0 {
+				b.searchBuf += string(r)
 			}
 			return m, nil
 		}
@@ -310,6 +358,10 @@ func (m Model) handleBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		b.filtering = true
 		b.filterBuf = ""
+		return m, nil
+	case "s":
+		b.searching = true
+		b.searchBuf = ""
 		return m, nil
 	case "esc", "q":
 		m.view = viewPlayer

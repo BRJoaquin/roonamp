@@ -119,6 +119,8 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 - Forward navigation: push current items/cursor/title onto stack, then browse+load new level from Roon
 - Back navigation: pop from stack instantly (no API call, cursor position preserved)
 - Fuzzy filter: uses `sahilm/fuzzy` (same algorithm as fzf) for `/` filtering
+- Global library search (`s`): the Roon "Search" item lives inside Library on stock installs, so `searchCmd` does `pop_all` → loads root → looks for Search → otherwise drills into "Library" and looks there → browses Search with `input: <query>`
+- Artist pages and `multi_session_key`: drilling into an artist prepends a synthetic "Show all albums (incl. streaming)" row that runs a side-trip search → Albums drill. To avoid invalidating the main session's `item_key`s (the side trip needs `pop_all`), the synthetic action and the empty-page auto-fallback both run under `multi_session_key: "synthetic"`. Each `browseLevel` on the stack remembers which session it belonged to so `goBack` restores the right session along with the items.
 
 ## Current state
 
@@ -153,7 +155,8 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 - `j`/`k` or arrows -- navigate up/down
 - `l`/`enter`/`right` -- drill into item
 - `h`/`backspace`/`left` -- go back one level
-- `/` -- fuzzy filter (fzf-style)
+- `/` -- fuzzy filter (fzf-style) on the current list
+- `s` -- global library search (artists, albums, tracks) via Roon's browse search
 - `esc`/`q` -- return to player
 
 #### Filter mode (in browser)

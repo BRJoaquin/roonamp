@@ -32,6 +32,7 @@ Connects directly to your Roon Core over WebSocket using the native MOO protocol
 - Multiple zone support with quick switching
 - Library browser with vim-style navigation (`h`/`j`/`k`/`l`)
 - fzf-style fuzzy filtering in the browser (`/`)
+- Global library search across artists, albums, and tracks (`s`)
 - Album art rendered directly in the terminal
 - Queue info (remaining tracks and time)
 - Preferences persisted across sessions (selected zone, album art toggle)
@@ -127,7 +128,8 @@ The auth token is saved to `~/.config/roonamp/token` for future connections.
 | `j` / `k` | Navigate up / down |
 | `l` / `enter` / `right` | Open / drill into |
 | `h` / `backspace` / `left` | Go back one level |
-| `/` | Fuzzy filter (fzf-style) |
+| `/` | Fuzzy filter (fzf-style) on the current list |
+| `s` | Global library search (artists, albums, tracks) |
 | `esc` / `q` | Return to player |
 
 ### Filter mode (in browser)
@@ -137,6 +139,15 @@ The auth token is saved to `~/.config/roonamp/token` for future connections.
 | _type_ | Fuzzy search on title and subtitle |
 | `enter` | Accept filter |
 | `esc` | Clear filter |
+| `backspace` | Delete character |
+
+### Search mode (in browser)
+
+| Key | Action |
+|-----|--------|
+| _type_ | Build the search query |
+| `enter` | Run the search via Roon's browse API |
+| `esc` | Cancel without searching |
 | `backspace` | Delete character |
 
 ## Configuration
