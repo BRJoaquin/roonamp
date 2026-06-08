@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"roonamp/internal/config"
+	"roonamp/internal/lyrics"
 	"roonamp/internal/roon"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -19,6 +21,7 @@ import (
 const (
 	viewPlayer = iota
 	viewBrowser
+	viewLyrics
 )
 
 // -- Messages --
@@ -29,6 +32,11 @@ type animTickMsg time.Time
 type albumArtMsg struct {
 	imageKey string
 	rendered string
+}
+type lyricsLoadedMsg struct {
+	sig    lyrics.Signature
+	lyr    *lyrics.Lyrics
+	errMsg string
 }
 
 // -- Model --
@@ -43,6 +51,7 @@ type Model struct {
 
 	progress progress.Model
 	browser  browserModel
+	lyrics   lyricsState
 
 	// Album art
 	artRendered    string
@@ -60,7 +69,14 @@ type Model struct {
 
 	// Volume auto-hide
 	volLastTouch time.Time
-	volLastValue float64 // track external volume changes
+	volLastValue float64
+
+	// Sub-second seek anchor for lyric line timing. See effectiveSeekPos and
+	// updateSeekAnchor for how this is maintained and consumed.
+	seekAnchorAt      time.Time
+	seekAnchorPos     time.Duration
+	seekAnchorPlaying bool
+	lastTrackSig      lyrics.Signature
 
 	savedZone string // zone ID to restore on startup
 	connected bool   // WebSocket link state, refreshed on each seek tick
@@ -119,17 +135,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if artCmd := m.maybeUpdateArt(); artCmd != nil {
 			cmds = append(cmds, artCmd)
 		}
+		if lyrCmd := m.maybeUpdateLyrics(); lyrCmd != nil {
+			cmds = append(cmds, lyrCmd)
+		}
 		if z := m.currentZone(); z != nil {
-			// Detect external volume changes
 			if len(z.Outputs) > 0 && z.Outputs[0].Volume != nil {
-				v := z.Outputs[0].Volume.Value
-				if v != m.volLastValue {
+				if v := z.Outputs[0].Volume.Value; v != m.volLastValue {
 					m.volLastTouch = time.Now()
 					m.volLastValue = v
 				}
 			}
+			m.updateSeekAnchor(z)
 		}
 		return m, tea.Batch(cmds...)
+
+	case lyricsLoadedMsg:
+		// Only apply if it matches what we asked for (track may have changed
+		// while the fetch was in flight).
+		if msg.sig == m.lyrics.pending {
+			m.lyrics.sig = msg.sig
+			m.lyrics.lyr = msg.lyr
+			m.lyrics.errMsg = msg.errMsg
+			m.lyrics.loading = false
+			m.lyrics.pending = lyrics.Signature{}
+		}
+		return m, nil
 
 	case seekTickMsg:
 		m.tickSeek()
@@ -180,6 +210,10 @@ func (m Model) View() string {
 		return m.browser.view()
 	}
 
+	if m.view == viewLyrics {
+		return renderLyrics(&m)
+	}
+
 	volVisible := !m.volLastTouch.IsZero() && time.Since(m.volLastTouch) < 5*time.Second
 
 	return renderPlayer(playerState{
@@ -208,6 +242,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Browser view keys
 	if m.view == viewBrowser {
 		return m.handleBrowserKey(msg)
+	}
+
+	// Lyrics view keys
+	if m.view == viewLyrics {
+		return m.handleLyricsKey(msg)
 	}
 
 	// Player view keys
@@ -245,8 +284,34 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "b":
 		return m.openBrowser()
+
+	case "L", "l":
+		return m.openLyrics()
 	}
 
+	return m, nil
+}
+
+func (m Model) openLyrics() (tea.Model, tea.Cmd) {
+	m.view = viewLyrics
+	if cmd := m.fetchLyricsIfNeeded(); cmd != nil {
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m Model) handleLyricsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "L", "l", "h", "left", "backspace":
+		m.view = viewPlayer
+		return m, nil
+	case " ":
+		return m, m.controlCmd("playpause")
+	case "n":
+		return m, m.controlCmd("next")
+	case "p":
+		return m, m.controlCmd("previous")
+	}
 	return m, nil
 }
 
@@ -410,6 +475,97 @@ func (m Model) volumeCmd(delta float64) tea.Cmd {
 			log.Printf("volume: %v", err)
 		}
 		return nil
+	}
+}
+
+// -- Lyrics --
+
+// updateSeekAnchor refreshes the wall-clock anchor used to interpolate the
+// playback position between server ticks. Re-anchoring on every zone update
+// would erase sub-second interpolation, so the same-track path only updates
+// when something actually changed. A track change is always a force-reset:
+// Roon's first update for a new track sometimes omits seek_position or
+// carries a stale value, and we don't want lyrics scrolling at the previous
+// song's elapsed time.
+func (m *Model) updateSeekAnchor(z *roon.Zone) {
+	sig := trackSignature(z)
+	if sig != m.lastTrackSig {
+		m.lastTrackSig = sig
+		m.seekAnchorAt = time.Now()
+		m.seekAnchorPos = 0
+		if z.NowPlaying != nil && z.NowPlaying.SeekPosition != nil {
+			m.seekAnchorPos = time.Duration(*z.NowPlaying.SeekPosition) * time.Second
+		}
+		m.seekAnchorPlaying = z.State == "playing"
+		return
+	}
+	if z.NowPlaying == nil {
+		return
+	}
+	hasSeek := z.NowPlaying.SeekPosition != nil
+	playing := z.State == "playing"
+	var serverPos time.Duration
+	if hasSeek {
+		serverPos = time.Duration(*z.NowPlaying.SeekPosition) * time.Second
+	}
+	if !m.seekAnchorAt.IsZero() &&
+		(!hasSeek || serverPos == m.seekAnchorPos) &&
+		playing == m.seekAnchorPlaying {
+		return
+	}
+	m.seekAnchorAt = time.Now()
+	if hasSeek {
+		m.seekAnchorPos = serverPos
+	}
+	m.seekAnchorPlaying = playing
+}
+
+// maybeUpdateLyrics fires a fetch if the lyrics view is open and the track
+// differs from what's loaded. Otherwise we'd hit LRCLIB on every zone update
+// for users who never open the lyrics view.
+func (m *Model) maybeUpdateLyrics() tea.Cmd {
+	if m.view != viewLyrics {
+		return nil
+	}
+	return m.fetchLyricsIfNeeded()
+}
+
+func (m *Model) fetchLyricsIfNeeded() tea.Cmd {
+	sig := trackSignature(m.currentZone())
+	if sig.Empty() {
+		m.lyrics.reset()
+		return nil
+	}
+	if sig == m.lyrics.sig && m.lyrics.lyr != nil {
+		return nil
+	}
+	if sig == m.lyrics.pending && m.lyrics.loading {
+		return nil
+	}
+	m.lyrics.reset()
+	m.lyrics.pending = sig
+	m.lyrics.loading = true
+	return lyricsCmd(sig)
+}
+
+func lyricsCmd(sig lyrics.Signature) tea.Cmd {
+	return func() tea.Msg {
+		if cached, err := lyrics.LoadCache(sig); err == nil && cached != nil {
+			return lyricsLoadedMsg{sig: sig, lyr: cached}
+		} else if errors.Is(err, lyrics.ErrNotFound) {
+			return lyricsLoadedMsg{sig: sig}
+		}
+
+		lyr, err := lyrics.Fetch(sig)
+		if errors.Is(err, lyrics.ErrNotFound) {
+			lyrics.SaveCache(sig, nil, true)
+			return lyricsLoadedMsg{sig: sig}
+		}
+		if err != nil {
+			return lyricsLoadedMsg{sig: sig, errMsg: err.Error()}
+		}
+		lyrics.SaveCache(sig, lyr, false)
+		return lyricsLoadedMsg{sig: sig, lyr: lyr}
 	}
 }
 

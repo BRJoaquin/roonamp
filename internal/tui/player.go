@@ -266,6 +266,7 @@ func renderHelpBar() string {
 		"[-/+] vol",
 		"[</>] zone",
 		"[b] browse",
+		"[L] lyrics",
 		"[a] art",
 		"[q] quit",
 	}
