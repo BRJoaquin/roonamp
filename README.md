@@ -4,24 +4,9 @@ A terminal music controller for [Roon](https://roon.app), built with Go and the 
 
 Connects directly to your Roon Core over WebSocket using the native MOO protocol. No Node.js bridge, no HTTP proxy -- a single static binary.
 
-```
-+----------------------------------------------------------------------+
-|  roonamp  |  Fiio K17  |  [>] PLAYING                               |
-|----------------------------------------------------------------------|
-|                                                                      |
-|  +---------------------+  Breathe (In the Air)                       |
-|  |                     |  Pink Floyd                                 |
-|  |     album art       |  The Dark Side of the Moon                  |
-|  |                     |  9 tracks remaining (41:17)                 |
-|  +---------------------+                                             |
-|                                                                      |
-|  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  02:34 / 05:55             |
-|                                                                      |
-|  < ( ) [=] Living Room s. | (*) [>] Fiio K17 >                      |
-|                                                                      |
-|  [space] play/pause  [p/n] prev/next  [-/+] vol  [b] browse         |
-+----------------------------------------------------------------------+
-```
+![roonamp demo](demo.gif)
+
+*Player with album art, library browser with fuzzy filtering, global search, and synced lyrics -- recorded with [VHS](https://github.com/charmbracelet/vhs) (`vhs demo.tape`).*
 
 ## Features
 
