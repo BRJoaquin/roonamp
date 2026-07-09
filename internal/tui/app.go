@@ -44,6 +44,7 @@ type radioResultMsg struct{ err error }
 
 type Model struct {
 	client *roon.Client
+	zoneCh chan map[string]*roon.Zone
 	zones  []*roon.Zone
 	idx    int
 	width  int
@@ -91,8 +92,28 @@ type Model struct {
 }
 
 func NewModel(client *roon.Client) Model {
+	// The zone channel bridges the read-loop goroutine into the Bubble Tea
+	// loop: the callback (installed once, here) pushes snapshots, and the
+	// recurring listenForZones command receives them as messages. Latest-wins:
+	// a queued update is replaced rather than the new one dropped. Pushes are
+	// serialized (one read-loop goroutine), so the drain cannot race another
+	// sender.
+	zoneCh := make(chan map[string]*roon.Zone, 1)
+	client.SetOnZonesUpdated(func(zones map[string]*roon.Zone) {
+		select {
+		case zoneCh <- zones:
+		default:
+			select {
+			case <-zoneCh:
+			default:
+			}
+			zoneCh <- zones
+		}
+	})
+
 	return Model{
 		client: client,
+		zoneCh: zoneCh,
 		progress: progress.New(
 			progress.WithScaledGradient(colorProgressA, colorProgressB),
 			progress.WithoutPercentage(),
@@ -683,14 +704,8 @@ func animTickCmd() tea.Cmd {
 }
 
 func (m Model) listenForZones() tea.Cmd {
+	ch := m.zoneCh
 	return func() tea.Msg {
-		ch := make(chan map[string]*roon.Zone, 1)
-		m.client.OnZonesUpdated = func(zones map[string]*roon.Zone) {
-			select {
-			case ch <- zones:
-			default:
-			}
-		}
 		return zonesUpdatedMsg{zones: <-ch}
 	}
 }

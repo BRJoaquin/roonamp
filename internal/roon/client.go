@@ -25,10 +25,18 @@ type Client struct {
 	reconnecting atomic.Bool
 	connected    atomic.Bool
 
-	mu    sync.RWMutex
-	zones map[string]*Zone
+	mu             sync.RWMutex
+	zones          map[string]*Zone
+	onZonesUpdated func(zones map[string]*Zone)
+}
 
-	OnZonesUpdated func(zones map[string]*Zone)
+// SetOnZonesUpdated installs the callback invoked with a fresh zone snapshot
+// after every zone update. The callback runs on the read-loop goroutine, so it
+// must not block and must not touch UI state directly.
+func (c *Client) SetOnZonesUpdated(fn func(zones map[string]*Zone)) {
+	c.mu.Lock()
+	c.onZonesUpdated = fn
+	c.mu.Unlock()
 }
 
 // Connected reports whether the WebSocket link is currently up. It flips false
@@ -218,6 +226,11 @@ func (c *Client) ImagePort() string {
 func (c *Client) Zones() map[string]*Zone {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.snapshotLocked()
+}
+
+// snapshotLocked copies the zone map. Callers must hold c.mu.
+func (c *Client) snapshotLocked() map[string]*Zone {
 	snapshot := make(map[string]*Zone, len(c.zones))
 	for k, v := range c.zones {
 		snapshot[k] = v
@@ -262,12 +275,8 @@ func (c *Client) handleZoneUpdate(msg *MooMessage) {
 		delete(c.zones, id)
 	}
 
-	if c.OnZonesUpdated != nil {
-		snapshot := make(map[string]*Zone, len(c.zones))
-		for k, v := range c.zones {
-			snapshot[k] = v
-		}
-		c.OnZonesUpdated(snapshot)
+	if c.onZonesUpdated != nil {
+		c.onZonesUpdated(c.snapshotLocked())
 	}
 }
 
