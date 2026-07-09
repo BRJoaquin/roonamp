@@ -178,14 +178,17 @@ func renderNowPlaying(z *roon.Zone, offset float64, maxWidth int) string {
 	return "\n" + lipgloss.JoinVertical(lipgloss.Left, lines...) + "\n"
 }
 
+// truncate limits s to maxWidth runes, ending in "..." when cut. Rune-based
+// so multi-byte titles (accents, CJK) are never sliced mid-character.
 func truncate(s string, maxWidth int) string {
-	if len(s) <= maxWidth {
+	r := []rune(s)
+	if len(r) <= maxWidth {
 		return s
 	}
 	if maxWidth <= 3 {
-		return s[:maxWidth]
+		return string(r[:maxWidth])
 	}
-	return s[:maxWidth-3] + "..."
+	return string(r[:maxWidth-3]) + "..."
 }
 
 // -- Progress --
@@ -254,8 +257,8 @@ func renderZoneSwitcher(zones []*roon.Zone, active int) string {
 	var parts []string
 	for i, z := range zones {
 		name := z.DisplayName
-		if len(name) > 14 {
-			name = name[:13] + "."
+		if r := []rune(name); len(r) > 14 {
+			name = string(r[:13]) + "."
 		}
 		icon := stateIcon(z.State)
 		if i == active {
