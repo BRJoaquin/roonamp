@@ -47,15 +47,15 @@ All network setup is **synchronous and blocking, before the TUI launches**: `Con
 
 There are two concurrent worlds and one bridge between them:
 
-1. **MOO/WebSocket goroutine** (`roon/moo.go`): `MooConn.ReadLoop()` runs in a background goroutine started by `Client.Connect`. It parses every incoming frame and dispatches by `Request-Id`: REQUEST/COMPLETE replies go to a per-request reply channel registered in `handlers`; subscription CONTINUE frames are routed to the handler registered via `Subscribe`. `Client.handleZoneUpdate` is that handler for zones -- it mutates the client's zone map under a mutex and then invokes the `Client.OnZonesUpdated` callback.
+1. **MOO/WebSocket goroutine** (`roon/moo.go`): `MooConn.ReadLoop()` runs in a background goroutine started by `Client.Connect`. It parses every incoming frame and dispatches by `Request-Id`: REQUEST/COMPLETE replies go to a per-request reply channel registered in `handlers`; subscription CONTINUE frames are routed to the handler registered via `Subscribe`. `Client.handleZoneUpdate` is that handler for zones -- it mutates the client's zone map under a mutex and then invokes the callback installed via `Client.SetOnZonesUpdated`.
 
 2. **Bubble Tea event loop** (`tui/app.go`): a single `Model` drives both the player and browser views (a `view` field routes `Update`/`View`). State changes only ever happen inside `Update`.
 
-3. **The bridge** (`Model.listenForZones`): a `tea.Cmd` that sets `client.OnZonesUpdated` to push into a channel, then blocks on that channel and returns the result as a `zonesUpdatedMsg`. Each time `Update` handles a `zonesUpdatedMsg` it re-issues `listenForZones()` to wait for the next push. This is how asynchronous Roon push updates become serialized Bubble Tea messages -- **do not touch zone state from the callback or any goroutine; convert it to a `Msg` and handle it in `Update`.**
+3. **The bridge** (`Model.zoneCh` + `Model.listenForZones`): `NewModel` creates a buffered channel and installs a callback once via `client.SetOnZonesUpdated` that pushes zone snapshots into it (latest-wins: a queued snapshot is replaced rather than the new one dropped). `listenForZones` is a `tea.Cmd` that blocks on that channel and returns the result as a `zonesUpdatedMsg`; each time `Update` handles one it re-issues `listenForZones()` to wait for the next push. This is how asynchronous Roon push updates become serialized Bubble Tea messages -- **do not touch zone state from the callback or any goroutine; convert it to a `Msg` and handle it in `Update`.**
 
-Synchronous request/response calls (`Control`, `ChangeVolume`, `Seek`, `Browse`, `Load`) are issued from within `tea.Cmd` closures (e.g. `controlCmd`, `volumeCmd`) so the blocking WebSocket round-trip happens off the UI loop.
+Synchronous request/response calls (`Control`, `ChangeVolume`, `Browse`, `Load`) are issued from within `tea.Cmd` closures (e.g. `controlCmd`, `volumeCmd`) so the blocking WebSocket round-trip happens off the UI loop.
 
-Two local `tea.Tick` loops also feed `Update`: `seekTickCmd` (1s, advances the displayed seek position between server updates) and `animTickCmd` (60fps, drives the harmonica spring animations for the zone-swipe and volume-pulse effects).
+Two local `tea.Tick` loops also feed `Update`: `seekTickCmd` (1s, refreshes the link state and forces a re-render; the displayed seek position is interpolated from a wall-clock anchor, see `updateSeekAnchor`/`effectiveSeekPos`) and `animTickCmd` (60fps, drives the harmonica spring animations for the zone-swipe and volume-pulse effects).
 
 ### Logging
 
