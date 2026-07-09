@@ -117,15 +117,36 @@ type browserModel struct {
 	height         int
 }
 
-// browseSnapshot captures the full browser state so a failed search can
-// restore the user to exactly where they were before pressing s+enter.
+// browseSnapshot captures the full browser state (current level plus the
+// navigation stack) so a failed search can restore the user to exactly where
+// they were before pressing s+enter.
 type browseSnapshot struct {
-	items   []roon.BrowseItem
-	title   string
-	cursor  int
-	offset  int
-	stack   []browseLevel
-	session string
+	level browseLevel
+	stack []browseLevel
+}
+
+// currentLevel captures the visible level for the stack or a snapshot.
+func (b *browserModel) currentLevel() browseLevel {
+	return browseLevel{
+		items:      b.items,
+		title:      b.title,
+		cursor:     b.cursor,
+		offset:     b.offset,
+		sessionKey: b.session,
+	}
+}
+
+func (b *browserModel) restoreLevel(l browseLevel) {
+	b.items = l.items
+	b.title = l.title
+	b.cursor = l.cursor
+	b.offset = l.offset
+	b.session = l.sessionKey
+}
+
+// pushLevel saves the current level so goBack can restore it.
+func (b *browserModel) pushLevel() {
+	b.stack = append(b.stack, b.currentLevel())
 }
 
 func newBrowser(client *roon.Client) browserModel {
@@ -201,14 +222,7 @@ func (b *browserModel) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			// Snapshot pre-search state so a failure restores the user
 			// to exactly where they were. applyResult clears the stack
 			// on success since search results are a fresh root.
-			b.searchSnapshot = &browseSnapshot{
-				items:   b.items,
-				title:   b.title,
-				cursor:  b.cursor,
-				offset:  b.offset,
-				stack:   b.stack,
-				session: b.session,
-			}
+			b.searchSnapshot = &browseSnapshot{level: b.currentLevel(), stack: b.stack}
 			b.clearFilter()
 			b.loading = true
 			b.title = "Searching..."
@@ -300,13 +314,7 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 		if artistName == "" {
 			return nil
 		}
-		b.stack = append(b.stack, browseLevel{
-			items:      b.items,
-			title:      b.title,
-			cursor:     b.cursor,
-			offset:     b.offset,
-			sessionKey: b.session,
-		})
+		b.pushLevel()
 		b.clearFilter()
 		b.loading = true
 		b.session = "synthetic"
@@ -325,13 +333,7 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 	}
 
 	// Push current level onto stack before navigating forward
-	b.stack = append(b.stack, browseLevel{
-		items:      b.items,
-		title:      b.title,
-		cursor:     b.cursor,
-		offset:     b.offset,
-		sessionKey: b.session,
-	})
+	b.pushLevel()
 	b.clearFilter()
 
 	b.loading = true
@@ -551,11 +553,7 @@ func (b *browserModel) goBack() bool {
 	}
 	prev := b.stack[len(b.stack)-1]
 	b.stack = b.stack[:len(b.stack)-1]
-	b.items = prev.items
-	b.title = prev.title
-	b.cursor = prev.cursor
-	b.offset = prev.offset
-	b.session = prev.sessionKey
+	b.restoreLevel(prev)
 	return true
 }
 
@@ -565,12 +563,8 @@ func (b *browserModel) applyResult(msg browseResultMsg) {
 		log.Printf("browse error: %v", msg.err)
 		if msg.fromSearch && b.searchSnapshot != nil {
 			s := b.searchSnapshot
-			b.items = s.items
-			b.title = s.title
-			b.cursor = s.cursor
-			b.offset = s.offset
+			b.restoreLevel(s.level)
 			b.stack = s.stack
-			b.session = s.session
 			b.searchSnapshot = nil
 			b.statusMsg = "search failed: " + msg.err.Error()
 			return
