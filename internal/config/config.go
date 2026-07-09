@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -55,6 +56,37 @@ func SaveToken(token string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(token), 0600)
+}
+
+func ServerPath() string {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "roonamp", "server")
+}
+
+// LoadServer returns the last successfully connected host and port,
+// or empty strings if none has been cached yet.
+func LoadServer() (host, port string) {
+	data, err := os.ReadFile(ServerPath())
+	if err != nil {
+		return "", ""
+	}
+	host, port, ok := strings.Cut(strings.TrimSpace(string(data)), ":")
+	if !ok {
+		return "", ""
+	}
+	return host, port
+}
+
+func SaveServer(host, port string) error {
+	path := ServerPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(host+":"+port), 0600)
 }
 
 func ZonePath() string {

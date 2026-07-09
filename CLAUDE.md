@@ -19,7 +19,7 @@ gofmt -l -w .                  # format (CI/standard Go formatting)
 
 - Requires Go 1.26+ (see `go.mod`).
 - There is no test suite, no Makefile, and no linter config -- `go vet` and `gofmt` are the only checks.
-- Running needs a reachable Roon Core: pass `-host`/`-port` or set `ROON_HOST`/`ROON_PORT` (flags win). The HTTP port varies per install (commonly 9100/9150/9200/9330).
+- Running needs a reachable Roon Core. Address resolution order: `-host`/`-port` flags, `ROON_HOST`/`ROON_PORT` env vars, last-good address cached in `~/.config/roonamp/server`, then SOOD UDP discovery. The HTTP port varies per install (commonly 9100/9150/9200/9330).
 - The binary writes nothing to stdout once the TUI starts; `log` output is discarded (see "Logging" below) to avoid corrupting the alt-screen.
 
 ## Constraints
@@ -27,7 +27,7 @@ gofmt -l -w .                  # format (CI/standard Go formatting)
 - NO emojis or unicode icons in the UI. ASCII-only for state indicators: `[>]`, `[=]`, `[x]`, `(*)`, etc.
 - Unicode block characters are OK for the animated progress bar (bubbles/progress default).
 - NO Node.js dependency. Direct WebSocket to Roon Core.
-- Server address via `-host`/`-port` flags or `ROON_HOST`/`ROON_PORT` env vars.
+- Server address via `-host`/`-port` flags or `ROON_HOST`/`ROON_PORT` env vars; with neither set, the cached last-good address is tried, then SOOD auto-discovery.
 - Single static binary. Preferences stored in `~/.config/roonamp/`.
 
 ## Architecture
@@ -73,7 +73,7 @@ roonamp/
 │   ├── config/
 │   │   └── config.go              # CLI flags, env vars, XDG persistence (token, zone, prefs)
 │   ├── roon/
-│   │   ├── sood.go                # SOOD UDP discovery (currently unused, manual connect only)
+│   │   ├── sood.go                # SOOD UDP discovery (fallback when no address given/cached)
 │   │   ├── moo.go                 # MOO/1 message framing over WebSocket
 │   │   ├── client.go              # High-level Roon API client
 │   │   └── types.go               # All JSON-mapped structs
@@ -96,9 +96,9 @@ roonamp/
 
 ### SOOD Discovery (UDP)
 
-- Implemented in `sood.go` but currently disabled
+- Implemented in `sood.go`; used automatically when no address is given via flags/env and the cached address fails
 - Roon broadcasts on UDP 9003, multicast 239.255.90.90
-- Server address provided via flags/env vars instead
+- Discovery returns early ~500ms after the first core responds; the last successfully connected address is cached at `~/.config/roonamp/server` so discovery only runs again when the Core's IP changes
 
 ## Roon API notes
 
@@ -126,7 +126,7 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 
 ### Implemented
 - MOO/1 protocol over WebSocket (binary frames, subscriptions, ping handler)
-- SOOD discovery protocol (unused, manual connect via flags)
+- SOOD discovery protocol (auto-discovery fallback; flags/env and cached address take priority)
 - Roon client: connect, register, subscribe zones, transport controls, browse API
 - Config: CLI flags (`-host`, `-port`), env var fallback, XDG token/zone/prefs persistence
 - TUI player view: track info, animated progress bar, album art, zone switcher

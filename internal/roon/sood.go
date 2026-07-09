@@ -11,13 +11,15 @@ import (
 )
 
 const (
-	soodPort         = 9003
-	soodMulticast    = "239.255.90.90"
-	soodMagic        = "SOOD"
-	soodVersion      = '2'
-	soodQuery        = 'Q'
-	soodResponse     = 'R'
-	discoveryTimeout = 5 * time.Second
+	soodPort      = 9003
+	soodMulticast = "239.255.90.90"
+	soodMagic     = "SOOD"
+	soodVersion   = 2
+	soodQuery     = 'Q'
+	soodResponse  = 'R'
+	// roonServiceID identifies the Roon Core service; the Core only answers
+	// SOOD queries whose query_service_id matches it.
+	roonServiceID = "00720724-5143-4a9b-abac-0e50cba674bb"
 )
 
 // Discover scans the network for Roon Cores via SOOD protocol.
@@ -68,6 +70,11 @@ func Discover(timeout time.Duration) ([]DiscoveredCore, error) {
 		}
 
 		if core.HTTPPort != "" {
+			if len(seen) == 0 {
+				// First core found: keep listening only briefly for
+				// siblings instead of waiting out the full timeout.
+				conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			}
 			seen[core.UniqueID] = *core
 		}
 	}
@@ -82,16 +89,35 @@ func Discover(timeout time.Duration) ([]DiscoveredCore, error) {
 func sendQuery(conn *net.UDPConn) {
 	tid := fmt.Sprintf("%08x", rand.Int31())
 	pkt := buildSoodPacket(soodQuery, map[string]string{
-		"_tid": tid,
+		"query_service_id": roonServiceID,
+		"_tid":             tid,
 	})
 
 	// Send to multicast
 	mcastAddr := &net.UDPAddr{IP: net.ParseIP(soodMulticast), Port: soodPort}
 	conn.WriteToUDP(pkt, mcastAddr)
 
-	// Send to broadcast
-	bcastAddr := &net.UDPAddr{IP: net.IPv4bcast, Port: soodPort}
-	conn.WriteToUDP(pkt, bcastAddr)
+	// Send to limited broadcast and each interface's directed broadcast
+	conn.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4bcast, Port: soodPort})
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagBroadcast == 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
+			}
+			bcast := make(net.IP, 4)
+			ip4 := ipnet.IP.To4()
+			for i := 0; i < 4; i++ {
+				bcast[i] = ip4[i] | ^ipnet.Mask[i]
+			}
+			conn.WriteToUDP(pkt, &net.UDPAddr{IP: bcast, Port: soodPort})
+		}
+	}
 }
 
 func buildSoodPacket(msgType byte, fields map[string]string) []byte {
@@ -100,8 +126,10 @@ func buildSoodPacket(msgType byte, fields map[string]string) []byte {
 	pkt = append(pkt, byte(soodVersion))
 	pkt = append(pkt, msgType)
 
+	// Each property: 1-byte name length, name, 2-byte BE value length, value.
 	for k, v := range fields {
-		pkt = append(pkt, k[0]) // type char = first byte of key
+		pkt = append(pkt, byte(len(k)))
+		pkt = append(pkt, []byte(k)...)
 		lenBuf := make([]byte, 2)
 		binary.BigEndian.PutUint16(lenBuf, uint16(len(v)))
 		pkt = append(pkt, lenBuf...)
@@ -143,6 +171,10 @@ func parseSoodPacket(data []byte, src *net.UDPAddr) (*DiscoveredCore, error) {
 		}
 	}
 
+	if core.ServiceID != roonServiceID {
+		return nil, fmt.Errorf("not a Roon Core response")
+	}
+
 	if core.UniqueID == "" {
 		core.UniqueID = core.IP + ":" + core.HTTPPort
 	}
@@ -160,28 +192,28 @@ func parseTLVFields(data []byte) []tlvField {
 	var fields []tlvField
 	pos := 0
 
-	// SOOD TLV: each field has a type string (null-terminated), then 2-byte length, then value
-	// Based on node-roon-api sood.js parsing
+	// SOOD property encoding (node-roon-api sood.js): 1-byte name length,
+	// name, 2-byte big-endian value length, value. A value length of 0xFFFF
+	// means null.
 	for pos < len(data) {
-		// Read the field name (null-terminated string)
-		nameStart := pos
-		for pos < len(data) && data[pos] != 0 {
-			pos++
-		}
-		if pos >= len(data) {
+		nameLen := int(data[pos])
+		pos++
+		if nameLen == 0 || pos+nameLen > len(data) {
 			break
 		}
-		name := string(data[nameStart:pos])
-		pos++ // skip null terminator
+		name := string(data[pos : pos+nameLen])
+		pos += nameLen
 
-		// Read 2-byte big-endian length
 		if pos+2 > len(data) {
 			break
 		}
 		length := int(binary.BigEndian.Uint16(data[pos : pos+2]))
 		pos += 2
 
-		// Read value
+		if length == 0xFFFF { // null value
+			fields = append(fields, tlvField{name: name})
+			continue
+		}
 		if pos+length > len(data) {
 			break
 		}

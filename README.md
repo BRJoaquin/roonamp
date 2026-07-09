@@ -67,7 +67,13 @@ go install github.com/brokenrubik/roonamp@latest
 
 ## Usage
 
-You need to provide your Roon Core's IP address and HTTP port.
+With no arguments, roonamp finds your Roon Core automatically:
+
+```bash
+roonamp
+```
+
+It first retries the last address it connected to (cached in `~/.config/roonamp/server`), and if that fails -- e.g. your router handed the Core a new IP -- it discovers the Core on the local network via SOOD (UDP multicast). You can still pin a specific Core manually:
 
 ### With flags
 
@@ -167,7 +173,7 @@ No manual configuration is needed. All files are created automatically.
 roonamp implements two of Roon's proprietary protocols:
 
 - **MOO** (over WebSocket) -- message framing protocol for all communication with Roon Core. HTTP-like format with `MOO/1` prefix, request IDs, and JSON bodies.
-- **SOOD** (UDP multicast) -- discovery protocol for finding Roon Cores on the network. Currently implemented but disabled in favor of manual connection via flags.
+- **SOOD** (UDP multicast) -- discovery protocol for finding Roon Cores on the network. Used automatically when no address is given and the cached one fails.
 
 The app registers as a Roon extension, subscribes to zone updates, and provides real-time transport control. The library browser maintains a client-side navigation stack for instant back-navigation without additional API calls.
 
@@ -175,7 +181,7 @@ The app registers as a Roon extension, subscribes to zone updates, and provides 
 
 - Roon's extension API does not expose signal path information (sample rate, bit depth, codec). Your DAC reads this from the USB audio stream directly.
 - Album art quality depends on terminal capabilities and font size.
-- SOOD auto-discovery is implemented but currently disabled. Use `-host` and `-port` flags instead.
+- SOOD auto-discovery requires the Core to be on the same L2 network (multicast/broadcast reachable). Across VLANs or VPNs, use `-host` and `-port`.
 
 ## Built with
 
