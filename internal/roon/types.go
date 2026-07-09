@@ -26,7 +26,6 @@ type Settings struct {
 type NowPlaying struct {
 	SeekPosition *int     `json:"seek_position"`
 	Length       int      `json:"length"`
-	OneLine      LineInfo `json:"one_line"`
 	TwoLine      LineInfo `json:"two_line"`
 	ThreeLine    LineInfo `json:"three_line"`
 	ImageKey     string   `json:"image_key"`
@@ -108,12 +107,6 @@ type ZonesResponse struct {
 type ControlRequest struct {
 	ZoneOrOutputID string `json:"zone_or_output_id"`
 	Control        string `json:"control"`
-}
-
-type SeekRequest struct {
-	ZoneOrOutputID string `json:"zone_or_output_id"`
-	How            string `json:"how"`
-	Seconds        int    `json:"seconds"`
 }
 
 type VolumeRequest struct {

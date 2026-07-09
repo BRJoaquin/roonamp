@@ -277,12 +277,6 @@ func (c *Client) ChangeVolume(outputID, how string, value float64) error {
 	return err
 }
 
-func (c *Client) Seek(zoneID, how string, seconds int) error {
-	_, err := c.conn().Send("com.roonlabs.transport:2/seek",
-		SeekRequest{ZoneOrOutputID: zoneID, How: how, Seconds: seconds})
-	return err
-}
-
 // -- Browse --
 
 func (c *Client) Browse(req BrowseRequest) (*BrowseResponse, error) {
@@ -307,29 +301,6 @@ func (c *Client) Load(req LoadRequest) (*LoadResponse, error) {
 		return nil, fmt.Errorf("unmarshal load: %w", err)
 	}
 	return &lr, nil
-}
-
-// -- Image --
-
-func (c *Client) GetImage(imageKey string, width, height int) ([]byte, error) {
-	req := map[string]interface{}{
-		"image_key": imageKey,
-		"scale":     "fit",
-		"width":     width,
-		"height":    height,
-		"format":    "image/jpeg",
-	}
-	resp, err := c.conn().Send("com.roonlabs.image:1/get_image", req)
-	if err != nil {
-		return nil, fmt.Errorf("get_image: %w", err)
-	}
-	if len(resp.RawBody) > 0 {
-		return resp.RawBody, nil
-	}
-	if len(resp.Body) > 0 {
-		return []byte(resp.Body), nil
-	}
-	return nil, fmt.Errorf("empty image response")
 }
 
 func (c *Client) Close() error {
