@@ -40,6 +40,24 @@ type lyricsLoadedMsg struct {
 }
 type radioResultMsg struct{ err error }
 
+// statusLine is a transient one-line message that auto-hides 5 seconds after
+// it was last set; isErr selects the error styling.
+type statusLine struct {
+	msg   string
+	isErr bool
+	at    time.Time
+}
+
+func (s *statusLine) set(msg string, isErr bool) {
+	s.msg = msg
+	s.isErr = isErr
+	s.at = time.Now()
+}
+
+func (s *statusLine) visible() bool {
+	return s.msg != "" && time.Since(s.at) < 5*time.Second
+}
+
 // -- Model --
 
 type Model struct {
@@ -73,11 +91,8 @@ type Model struct {
 	volLastTouch time.Time
 	volLastValue float64
 
-	// Transient player status line (e.g. radio start feedback). Auto-hides a
-	// few seconds after statusTouch; statusErr selects the error styling.
-	statusMsg   string
-	statusErr   bool
-	statusTouch time.Time
+	// Transient player status line (e.g. radio start feedback).
+	status statusLine
 
 	// Sub-second seek anchor for lyric line timing. See effectiveSeekPos and
 	// updateSeekAnchor for how this is maintained and consumed.
@@ -206,13 +221,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioResultMsg:
 		if msg.err != nil {
-			m.statusMsg = "radio failed: " + msg.err.Error()
-			m.statusErr = true
+			m.status.set("radio failed: "+msg.err.Error(), true)
 		} else {
-			m.statusMsg = "radio started"
-			m.statusErr = false
+			m.status.set("radio started", false)
 		}
-		m.statusTouch = time.Now()
 		return m, nil
 
 	case browseResultMsg:
@@ -256,8 +268,8 @@ func (m Model) View() string {
 	volVisible := !m.volLastTouch.IsZero() && time.Since(m.volLastTouch) < 5*time.Second
 
 	status := ""
-	if m.statusMsg != "" && time.Since(m.statusTouch) < 5*time.Second {
-		status = m.statusMsg
+	if m.status.visible() {
+		status = m.status.msg
 	}
 
 	return renderPlayer(playerState{
@@ -273,7 +285,7 @@ func (m Model) View() string {
 		showArt:     m.showArt,
 		connected:   m.connected,
 		status:      status,
-		statusErr:   m.statusErr,
+		statusErr:   m.status.isErr,
 	})
 }
 
@@ -361,16 +373,12 @@ func (m Model) startRadio() (tea.Model, tea.Cmd) {
 	if title == "" {
 		return m.setStatus("no track for radio", true)
 	}
-	m.statusMsg = "starting radio: " + title
-	m.statusErr = false
-	m.statusTouch = time.Now()
+	m.status.set("starting radio: "+title, false)
 	return m, m.startRadioCmd(z.ZoneID, title, artist)
 }
 
 func (m Model) setStatus(msg string, isErr bool) (tea.Model, tea.Cmd) {
-	m.statusMsg = msg
-	m.statusErr = isErr
-	m.statusTouch = time.Now()
+	m.status.set(msg, isErr)
 	return m, nil
 }
 
