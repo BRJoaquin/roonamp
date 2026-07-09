@@ -38,6 +38,7 @@ type lyricsLoadedMsg struct {
 	lyr    *lyrics.Lyrics
 	errMsg string
 }
+type radioResultMsg struct{ err error }
 
 // -- Model --
 
@@ -70,6 +71,12 @@ type Model struct {
 	// Volume auto-hide
 	volLastTouch time.Time
 	volLastValue float64
+
+	// Transient player status line (e.g. radio start feedback). Auto-hides a
+	// few seconds after statusTouch; statusErr selects the error styling.
+	statusMsg   string
+	statusErr   bool
+	statusTouch time.Time
 
 	// Sub-second seek anchor for lyric line timing. See effectiveSeekPos and
 	// updateSeekAnchor for how this is maintained and consumed.
@@ -176,6 +183,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case radioResultMsg:
+		if msg.err != nil {
+			m.statusMsg = "radio failed: " + msg.err.Error()
+			m.statusErr = true
+		} else {
+			m.statusMsg = "radio started"
+			m.statusErr = false
+		}
+		m.statusTouch = time.Now()
+		return m, nil
+
 	case browseResultMsg:
 		if msg.done {
 			m.view = viewPlayer
@@ -216,6 +234,11 @@ func (m Model) View() string {
 
 	volVisible := !m.volLastTouch.IsZero() && time.Since(m.volLastTouch) < 5*time.Second
 
+	status := ""
+	if m.statusMsg != "" && time.Since(m.statusTouch) < 5*time.Second {
+		status = m.statusMsg
+	}
+
 	return renderPlayer(playerState{
 		zones:       m.zones,
 		idx:         m.idx,
@@ -228,6 +251,8 @@ func (m Model) View() string {
 		artRendered: m.artRendered,
 		showArt:     m.showArt,
 		connected:   m.connected,
+		status:      status,
+		statusErr:   m.statusErr,
 	})
 }
 
@@ -287,9 +312,56 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "L", "l":
 		return m.openLyrics()
+
+	case "r":
+		return m.startRadio()
 	}
 
 	return m, nil
+}
+
+// startRadio kicks off Roon Radio seeded by the current track, replacing the
+// zone's queue. The blocking browse round-trips happen inside startRadioCmd;
+// here we just validate and set the optimistic status line.
+func (m Model) startRadio() (tea.Model, tea.Cmd) {
+	z := m.currentZone()
+	if z == nil || z.NowPlaying == nil {
+		return m.setStatus("nothing playing", true)
+	}
+	np := z.NowPlaying
+	title := strings.TrimSpace(np.ThreeLine.Line1)
+	if title == "" {
+		title = strings.TrimSpace(np.TwoLine.Line1)
+	}
+	artist := strings.TrimSpace(np.ThreeLine.Line2)
+	if artist == "" {
+		artist = strings.TrimSpace(np.TwoLine.Line2)
+	}
+	if title == "" {
+		return m.setStatus("no track for radio", true)
+	}
+	m.statusMsg = "starting radio: " + title
+	m.statusErr = false
+	m.statusTouch = time.Now()
+	return m, m.startRadioCmd(z.ZoneID, title, artist)
+}
+
+func (m Model) setStatus(msg string, isErr bool) (tea.Model, tea.Cmd) {
+	m.statusMsg = msg
+	m.statusErr = isErr
+	m.statusTouch = time.Now()
+	return m, nil
+}
+
+func (m Model) startRadioCmd(zoneID, title, artist string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if err := startSongRadio(client, zoneID, title, artist); err != nil {
+			log.Printf("start radio: %v", err)
+			return radioResultMsg{err: err}
+		}
+		return radioResultMsg{}
+	}
 }
 
 func (m Model) openLyrics() (tea.Model, tea.Cmd) {

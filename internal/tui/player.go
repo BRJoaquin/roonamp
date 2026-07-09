@@ -24,6 +24,8 @@ type playerState struct {
 	artRendered  string
 	showArt      bool
 	connected    bool
+	status       string
+	statusErr    bool
 }
 
 func renderPlayer(ps playerState) string {
@@ -78,6 +80,16 @@ func renderPlayer(ps playerState) string {
 	if len(ps.zones) > 1 {
 		sections = append(sections, "")
 		sections = append(sections, renderZoneSwitcher(ps.zones, ps.idx))
+	}
+
+	// -- Transient status (e.g. radio feedback) --
+	if ps.status != "" {
+		statusStyle := styleArtist
+		if ps.statusErr {
+			statusStyle = styleError
+		}
+		sections = append(sections, "")
+		sections = append(sections, statusStyle.Render(ps.status))
 	}
 
 	// -- Help --
@@ -266,6 +278,7 @@ func renderHelpBar() string {
 		"[-/+] vol",
 		"[</>] zone",
 		"[b] browse",
+		"[r] radio",
 		"[L] lyrics",
 		"[a] art",
 		"[q] quit",
