@@ -22,80 +22,43 @@ const radioSession = "radio"
 // (disambiguated by artist) -> the track's action menu -> "Start Radio". The
 // browse "go back" mechanism is unreliable, so each step only ever descends.
 func startSongRadio(client *roon.Client, zoneID, title, artist string) error {
-	session := radioSession
+	s := browseSession{client: client, zoneID: zoneID, session: radioSession}
 
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		PopAll:          true,
-		MultiSessionKey: session,
-	}); err != nil {
+	if err := s.popAll(); err != nil {
 		return fmt.Errorf("pop_all: %w", err)
 	}
 
-	searchKey, err := findSearchKey(client, zoneID, session)
+	searchKey, err := findSearchKey(s)
 	if err != nil {
 		return err
 	}
 
 	// Search by title; the artist disambiguates within the results.
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &searchKey,
-		Input:           title,
-		MultiSessionKey: session,
-	}); err != nil {
+	results, err := s.open(searchKey, title)
+	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
-	results, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
-	if err != nil {
-		return fmt.Errorf("load search: %w", err)
-	}
 
-	trackKey, err := resolveTrack(client, zoneID, session, results.Items, title, artist)
+	trackKey, err := resolveTrack(s, results.Items, title, artist)
 	if err != nil {
 		return err
 	}
 
 	// Browsing a track row opens its action menu (Play Now / Queue / Start
 	// Radio / ...).
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &trackKey,
-		MultiSessionKey: session,
-	}); err != nil {
+	menu, err := s.open(trackKey, "")
+	if err != nil {
 		return fmt.Errorf("open track menu: %w", err)
 	}
-	menu, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
-	if err != nil {
-		return fmt.Errorf("load track menu: %w", err)
-	}
 
-	radioKey, err := findRadioActionKey(client, zoneID, session, menu.Items)
+	radioKey, err := findRadioActionKey(s, menu.Items)
 	if err != nil {
 		return err
 	}
 
 	// Triggering an "action" item starts the radio immediately; there is no
 	// further list to load.
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &radioKey,
-		MultiSessionKey: session,
-	}); err != nil {
+	if _, err := s.browse(radioKey, ""); err != nil {
 		return fmt.Errorf("start radio: %w", err)
 	}
 	return nil
@@ -105,24 +68,11 @@ func startSongRadio(client *roon.Client, zoneID, title, artist string) error {
 // stock Roon the Search page groups hits into Artists / Albums / Tracks
 // buckets, so it prefers the "Tracks" bucket; failing that it looks for a
 // track-shaped row directly among the top results.
-func resolveTrack(client *roon.Client, zoneID, session string, results []roon.BrowseItem, title, artist string) (string, error) {
+func resolveTrack(s browseSession, results []roon.BrowseItem, title, artist string) (string, error) {
 	if bucket := pickItemByTitlePrefix(results, "Tracks"); bucket != "" {
-		if _, err := client.Browse(roon.BrowseRequest{
-			Hierarchy:       "browse",
-			ZoneOrOutputID:  zoneID,
-			ItemKey:         &bucket,
-			MultiSessionKey: session,
-		}); err != nil {
-			return "", fmt.Errorf("browse Tracks: %w", err)
-		}
-		tracks, err := client.Load(roon.LoadRequest{
-			Hierarchy:       "browse",
-			Offset:          0,
-			Count:           100,
-			MultiSessionKey: session,
-		})
+		tracks, err := s.open(bucket, "")
 		if err != nil {
-			return "", fmt.Errorf("load Tracks: %w", err)
+			return "", fmt.Errorf("open Tracks: %w", err)
 		}
 		if key := pickBestTrack(tracks.Items, title, artist); key != "" {
 			return key, nil
@@ -176,7 +126,7 @@ func pickBestTrack(items []roon.BrowseItem, title, artist string) string {
 // first, then descend into the play action_list once — descending consumes the
 // session's position, so only one action_list can be inspected without a fresh
 // pop_all.
-func findRadioActionKey(client *roon.Client, zoneID, session string, items []roon.BrowseItem) (string, error) {
+func findRadioActionKey(s browseSession, items []roon.BrowseItem) (string, error) {
 	if key := pickRadioAction(items); key != "" {
 		return key, nil
 	}
@@ -186,22 +136,9 @@ func findRadioActionKey(client *roon.Client, zoneID, session string, items []roo
 		return "", fmt.Errorf("no Start Radio action found")
 	}
 
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &listKey,
-		MultiSessionKey: session,
-	}); err != nil {
-		return "", fmt.Errorf("browse play menu: %w", err)
-	}
-	sub, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
+	sub, err := s.open(listKey, "")
 	if err != nil {
-		return "", fmt.Errorf("load play menu: %w", err)
+		return "", fmt.Errorf("open play menu: %w", err)
 	}
 	if key := pickRadioAction(sub.Items); key != "" {
 		return key, nil
@@ -212,33 +149,20 @@ func findRadioActionKey(client *roon.Client, zoneID, session string, items []roo
 // pickRadioAction returns the item_key of the first immediately-triggerable
 // ("action") item whose title mentions "radio".
 func pickRadioAction(items []roon.BrowseItem) string {
-	for i := range items {
-		it := &items[i]
-		if it.ItemKey == nil || it.Hint != "action" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(it.Title), "radio") {
-			return *it.ItemKey
-		}
-	}
-	return ""
+	return findItemKey(items, func(it *roon.BrowseItem) bool {
+		return it.Hint == "action" && strings.Contains(strings.ToLower(it.Title), "radio")
+	})
 }
 
 // pickPlayActionList returns the item_key of a play menu: an action_list whose
 // title mentions "play" if present, otherwise the first action_list.
 func pickPlayActionList(items []roon.BrowseItem) string {
-	var first string
-	for i := range items {
-		it := &items[i]
-		if it.Hint != "action_list" || it.ItemKey == nil {
-			continue
-		}
-		if strings.Contains(strings.ToLower(it.Title), "play") {
-			return *it.ItemKey
-		}
-		if first == "" {
-			first = *it.ItemKey
-		}
+	if key := findItemKey(items, func(it *roon.BrowseItem) bool {
+		return it.Hint == "action_list" && strings.Contains(strings.ToLower(it.Title), "play")
+	}); key != "" {
+		return key
 	}
-	return first
+	return findItemKey(items, func(it *roon.BrowseItem) bool {
+		return it.Hint == "action_list"
+	})
 }

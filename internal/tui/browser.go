@@ -23,6 +23,65 @@ type browseResultMsg struct {
 	switchSession string // if set, applyResult flips b.session to this value
 }
 
+// browseSession bundles the client, zone, and Roon multi_session_key for a
+// sequence of browse calls, so multi-step drills (search, radio, artist
+// albums) read as intent instead of repeated request plumbing. Every load
+// fetches the first 100 items of the current level.
+type browseSession struct {
+	client  *roon.Client
+	zoneID  string
+	session string
+}
+
+func (s browseSession) popAll() error {
+	_, err := s.client.Browse(roon.BrowseRequest{
+		Hierarchy:       "browse",
+		ZoneOrOutputID:  s.zoneID,
+		PopAll:          true,
+		MultiSessionKey: s.session,
+	})
+	return err
+}
+
+// browse descends into itemKey; input answers an input prompt (e.g. Search).
+func (s browseSession) browse(itemKey, input string) (*roon.BrowseResponse, error) {
+	return s.client.Browse(roon.BrowseRequest{
+		Hierarchy:       "browse",
+		ZoneOrOutputID:  s.zoneID,
+		ItemKey:         &itemKey,
+		Input:           input,
+		MultiSessionKey: s.session,
+	})
+}
+
+// load fetches the items of the current level.
+func (s browseSession) load() (*roon.LoadResponse, error) {
+	return s.client.Load(roon.LoadRequest{
+		Hierarchy:       "browse",
+		Offset:          0,
+		Count:           100,
+		MultiSessionKey: s.session,
+	})
+}
+
+// open descends into itemKey and loads the resulting list.
+func (s browseSession) open(itemKey, input string) (*roon.LoadResponse, error) {
+	if _, err := s.browse(itemKey, input); err != nil {
+		return nil, err
+	}
+	return s.load()
+}
+
+// findItemKey returns the item_key of the first item that has one and matches.
+func findItemKey(items []roon.BrowseItem, match func(*roon.BrowseItem) bool) string {
+	for i := range items {
+		if it := &items[i]; it.ItemKey != nil && match(it) {
+			return *it.ItemKey
+		}
+	}
+	return ""
+}
+
 // browseLevel stores the state of one level in the browse hierarchy.
 // sessionKey is the Roon multi_session_key that was active when this level
 // was captured — restoring the level also restores its session, so the cached
@@ -108,21 +167,12 @@ func (b *browserModel) activate(zoneID string) tea.Cmd {
 	b.session = ""
 	b.statusMsg = ""
 
-	client := b.client
+	sess := browseSession{client: b.client, zoneID: zoneID}
 	return func() tea.Msg {
-		_, err := client.Browse(roon.BrowseRequest{
-			Hierarchy:      "browse",
-			ZoneOrOutputID: zoneID,
-			PopAll:         true,
-		})
-		if err != nil {
+		if err := sess.popAll(); err != nil {
 			return browseResultMsg{err: err}
 		}
-		lr, err := client.Load(roon.LoadRequest{
-			Hierarchy: "browse",
-			Offset:    0,
-			Count:     100,
-		})
+		lr, err := sess.load()
 		if err != nil {
 			return browseResultMsg{err: err}
 		}
@@ -167,11 +217,9 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 		b.clearFilter()
 		b.loading = true
 		b.session = "synthetic"
-		client := b.client
-		zoneID := b.zoneID
-		session := b.session
+		sess := browseSession{client: b.client, zoneID: b.zoneID, session: b.session}
 		return func() tea.Msg {
-			page, err := openAlbumsForArtist(client, zoneID, artistName, session)
+			page, err := openAlbumsForArtist(sess, artistName)
 			if err != nil {
 				return browseResultMsg{err: fmt.Errorf("albums: %w", err)}
 			}
@@ -194,9 +242,7 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 	b.clearFilter()
 
 	b.loading = true
-	client := b.client
-	zoneID := b.zoneID
-	session := b.session
+	sess := browseSession{client: b.client, zoneID: b.zoneID, session: b.session}
 	key := *item.ItemKey
 	isAction := item.Hint == "action"
 	artistName := ""
@@ -205,24 +251,14 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		br, err := client.Browse(roon.BrowseRequest{
-			Hierarchy:       "browse",
-			ZoneOrOutputID:  zoneID,
-			ItemKey:         &key,
-			MultiSessionKey: session,
-		})
+		br, err := sess.browse(key, "")
 		if err != nil {
 			return browseResultMsg{err: err}
 		}
 		if isAction || br.Action == "message" || br.List == nil {
 			return browseResultMsg{done: true}
 		}
-		lr, err := client.Load(roon.LoadRequest{
-			Hierarchy:       "browse",
-			Offset:          0,
-			Count:           100,
-			MultiSessionKey: session,
-		})
+		lr, err := sess.load()
 		if err != nil {
 			return browseResultMsg{err: err}
 		}
@@ -230,7 +266,8 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 			if artistName != "" {
 				// Empty-page fallback uses the synthetic session so the
 				// main session stays positioned at the artist page.
-				if page, terr := openAlbumsForArtist(client, zoneID, artistName, "synthetic"); terr == nil {
+				syn := browseSession{client: sess.client, zoneID: sess.zoneID, session: "synthetic"}
+				if page, terr := openAlbumsForArtist(syn, artistName); terr == nil {
 					return browseResultMsg{items: page.Items, list: page.List, switchSession: "synthetic"}
 				}
 			}
@@ -283,38 +320,19 @@ func isArtistItem(item *roon.BrowseItem) bool {
 // across all sources (library + TIDAL + Qobuz), so the Albums bucket is the
 // most reliable way to get the full set of albums for an artist — including
 // streaming albums that don't appear on a library-only artist page.
-func openAlbumsForArtist(client *roon.Client, zoneID, artistName, session string) (*roon.LoadResponse, error) {
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		PopAll:          true,
-		MultiSessionKey: session,
-	}); err != nil {
+func openAlbumsForArtist(s browseSession, artistName string) (*roon.LoadResponse, error) {
+	if err := s.popAll(); err != nil {
 		return nil, fmt.Errorf("pop_all: %w", err)
 	}
 
-	searchKey, err := findSearchKey(client, zoneID, session)
+	searchKey, err := findSearchKey(s)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &searchKey,
-		Input:           artistName,
-		MultiSessionKey: session,
-	}); err != nil {
-		return nil, fmt.Errorf("search: %w", err)
-	}
-	results, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
+	results, err := s.open(searchKey, artistName)
 	if err != nil {
-		return nil, fmt.Errorf("load search: %w", err)
+		return nil, fmt.Errorf("search: %w", err)
 	}
 
 	albumsKey := pickItemByTitlePrefix(results.Items, "Albums")
@@ -323,34 +341,17 @@ func openAlbumsForArtist(client *roon.Client, zoneID, artistName, session string
 		// at least sees something useful (categories or top matches).
 		return results, nil
 	}
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &albumsKey,
-		MultiSessionKey: session,
-	}); err != nil {
-		return nil, fmt.Errorf("browse Albums: %w", err)
-	}
-	albums, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
+	albums, err := s.open(albumsKey, "")
 	if err != nil {
-		return nil, fmt.Errorf("load Albums: %w", err)
+		return nil, fmt.Errorf("open Albums: %w", err)
 	}
 	return albums, nil
 }
 
 func pickItemByTitle(items []roon.BrowseItem, title string) string {
-	for i := range items {
-		it := &items[i]
-		if it.ItemKey != nil && strings.EqualFold(it.Title, title) {
-			return *it.ItemKey
-		}
-	}
-	return ""
+	return findItemKey(items, func(it *roon.BrowseItem) bool {
+		return strings.EqualFold(it.Title, title)
+	})
 }
 
 // composeItemLine returns a single-row rendering of title + " -- " + subtitle,
@@ -385,13 +386,9 @@ func composeItemLine(title, subtitle string, maxWidth int) string {
 }
 
 func pickItemByTitlePrefix(items []roon.BrowseItem, prefix string) string {
-	for i := range items {
-		it := &items[i]
-		if it.ItemKey != nil && strings.HasPrefix(it.Title, prefix) {
-			return *it.ItemKey
-		}
-	}
-	return ""
+	return findItemKey(items, func(it *roon.BrowseItem) bool {
+		return strings.HasPrefix(it.Title, prefix)
+	})
 }
 
 // searchCmd performs a global library search. The "Search" item is the one
@@ -400,38 +397,21 @@ func pickItemByTitlePrefix(items []roon.BrowseItem, prefix string) string {
 // So: pop back to root, look for Search there, otherwise drill into Library
 // and look there. Then browse the Search item with the user's `input`.
 func (b *browserModel) searchCmd(query string) tea.Cmd {
-	client := b.client
-	zoneID := b.zoneID
+	sess := browseSession{client: b.client, zoneID: b.zoneID}
 
 	return func() tea.Msg {
-		if _, err := client.Browse(roon.BrowseRequest{
-			Hierarchy:      "browse",
-			ZoneOrOutputID: zoneID,
-			PopAll:         true,
-		}); err != nil {
+		if err := sess.popAll(); err != nil {
 			return browseResultMsg{fromSearch: true, err: fmt.Errorf("pop_all: %w", err)}
 		}
 
-		searchKey, err := findSearchKey(client, zoneID, "")
+		searchKey, err := findSearchKey(sess)
 		if err != nil {
 			return browseResultMsg{fromSearch: true, err: err}
 		}
 
-		if _, err := client.Browse(roon.BrowseRequest{
-			Hierarchy:      "browse",
-			ZoneOrOutputID: zoneID,
-			ItemKey:        &searchKey,
-			Input:          query,
-		}); err != nil {
-			return browseResultMsg{fromSearch: true, err: fmt.Errorf("search: %w", err)}
-		}
-		lr, err := client.Load(roon.LoadRequest{
-			Hierarchy: "browse",
-			Offset:    0,
-			Count:     100,
-		})
+		lr, err := sess.open(searchKey, query)
 		if err != nil {
-			return browseResultMsg{fromSearch: true, err: fmt.Errorf("load results: %w", err)}
+			return browseResultMsg{fromSearch: true, err: fmt.Errorf("search: %w", err)}
 		}
 		return browseResultMsg{fromSearch: true, items: lr.Items, list: lr.List}
 	}
@@ -441,13 +421,8 @@ func (b *browserModel) searchCmd(query string) tea.Cmd {
 // session. It assumes the session is already at the browse root (pop_all
 // just issued). It loads the root and returns the Search item if present,
 // otherwise drills into "Library" and looks again.
-func findSearchKey(client *roon.Client, zoneID, session string) (string, error) {
-	root, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
+func findSearchKey(s browseSession) (string, error) {
+	root, err := s.load()
 	if err != nil {
 		return "", fmt.Errorf("load root: %w", err)
 	}
@@ -460,22 +435,9 @@ func findSearchKey(client *roon.Client, zoneID, session string) (string, error) 
 		return "", fmt.Errorf("no Search item at root and no Library to drill into")
 	}
 
-	if _, err := client.Browse(roon.BrowseRequest{
-		Hierarchy:       "browse",
-		ZoneOrOutputID:  zoneID,
-		ItemKey:         &libraryKey,
-		MultiSessionKey: session,
-	}); err != nil {
-		return "", fmt.Errorf("browse Library: %w", err)
-	}
-	lib, err := client.Load(roon.LoadRequest{
-		Hierarchy:       "browse",
-		Offset:          0,
-		Count:           100,
-		MultiSessionKey: session,
-	})
+	lib, err := s.open(libraryKey, "")
 	if err != nil {
-		return "", fmt.Errorf("load Library: %w", err)
+		return "", fmt.Errorf("open Library: %w", err)
 	}
 	if key := pickSearchKey(lib.Items); key != "" {
 		return key, nil
@@ -484,16 +446,9 @@ func findSearchKey(client *roon.Client, zoneID, session string) (string, error) 
 }
 
 func pickSearchKey(items []roon.BrowseItem) string {
-	for i := range items {
-		it := &items[i]
-		if it.ItemKey == nil {
-			continue
-		}
-		if it.InputPrompt != nil || it.Title == "Search" {
-			return *it.ItemKey
-		}
-	}
-	return ""
+	return findItemKey(items, func(it *roon.BrowseItem) bool {
+		return it.InputPrompt != nil || it.Title == "Search"
+	})
 }
 
 // goBack pops one level from the local stack
