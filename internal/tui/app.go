@@ -278,6 +278,7 @@ func (m Model) View() string {
 		width:       w,
 		height:      h,
 		prog:        m.progress,
+		seekPos:     int(m.effectiveSeekPos() / time.Second),
 		swipeOffset: m.swipePos,
 		volPulse:    m.volPulse,
 		volVisible:  volVisible,
@@ -550,6 +551,10 @@ func (m *Model) switchZone(delta int) tea.Cmd {
 		m.swipePos, m.swipeVel = -20, 0
 	}
 	m.saveCurrentZone()
+	// Re-anchor seek interpolation to the newly selected zone's position.
+	if z := m.currentZone(); z != nil {
+		m.updateSeekAnchor(z)
+	}
 	return m.maybeUpdateArt()
 }
 
@@ -779,17 +784,9 @@ func (m *Model) saveCurrentZone() {
 	}
 }
 
+// tickSeek runs once a second. The displayed playback position comes from the
+// wall-clock anchor (effectiveSeekPos), so nothing needs advancing here — the
+// tick's job is refreshing the link state and forcing a re-render.
 func (m *Model) tickSeek() {
 	m.connected = m.client.Connected()
-
-	z := m.currentZone()
-	if z == nil || z.NowPlaying == nil || z.State != "playing" {
-		return
-	}
-	if z.NowPlaying.SeekPosition == nil {
-		return
-	}
-	if *z.NowPlaying.SeekPosition < z.NowPlaying.Length {
-		*z.NowPlaying.SeekPosition++
-	}
 }

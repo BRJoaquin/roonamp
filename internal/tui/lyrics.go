@@ -60,7 +60,7 @@ func renderLyrics(m *Model) string {
 	case m.lyrics.lyr == nil:
 		body = styleDim.Render("No lyrics found for this track.")
 	case len(m.lyrics.lyr.Synced) > 0:
-		body = renderSynced(m.lyrics.lyr.Synced, m.effectiveSeekPos(), h-8, w-6)
+		body = renderSynced(m.lyrics.lyr.Synced, m.effectiveSeekPos()+lyricLead, h-8, w-6)
 	case len(m.lyrics.lyr.PlainLines) > 0:
 		body = renderPlain(m.lyrics.lyr.PlainLines, w-6)
 	default:
@@ -99,26 +99,22 @@ func renderLyricsHeader(z *roon.Zone, connected bool) string {
 		styleArtist.Render(np.ThreeLine.Line2) + suffix
 }
 
-// lyricLead is added to the interpolated position so a line lights up just
-// before it is sung -- LRC timestamps mark the start of the line, which
-// otherwise reads as late once the eye catches up.
+// lyricLead is added to the playback position for lyric selection so a line
+// lights up just before it is sung -- LRC timestamps mark the start of the
+// line, which otherwise reads as late once the eye catches up.
 const lyricLead = 250 * time.Millisecond
 
-// effectiveSeekPos returns the wall-clock-interpolated playback position used
-// for lyric line selection. The anchor is maintained by updateSeekAnchor;
-// while playing, this advances at real time; while paused or stopped, it
-// holds at the last known position.
+// effectiveSeekPos returns the wall-clock-interpolated playback position for
+// the current zone. The anchor is maintained by updateSeekAnchor; while
+// playing, this advances at real time; while paused or stopped, it holds at
+// the last known position.
 func (m *Model) effectiveSeekPos() time.Duration {
 	z := m.currentZone()
 	if z == nil || z.NowPlaying == nil {
 		return 0
 	}
 	if m.seekAnchorPlaying && !m.seekAnchorAt.IsZero() {
-		pos := m.seekAnchorPos + time.Since(m.seekAnchorAt) + lyricLead
-		if pos < 0 {
-			pos = 0
-		}
-		return pos
+		return m.seekAnchorPos + time.Since(m.seekAnchorAt)
 	}
 	if z.NowPlaying.SeekPosition == nil {
 		return 0

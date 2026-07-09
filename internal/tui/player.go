@@ -18,6 +18,7 @@ type playerState struct {
 	height       int
 	contentWidth int
 	prog         progress.Model
+	seekPos      int // interpolated playback position, seconds
 	swipeOffset  float64
 	volPulse     float64
 	volVisible   bool
@@ -56,7 +57,7 @@ func renderPlayer(ps playerState) string {
 	sections = append(sections, renderArtAndInfo(z, ps))
 
 	// -- Progress bar --
-	progLine := renderProgressBar(z, ps.prog)
+	progLine := renderProgressBar(z, ps.prog, ps.seekPos)
 	if progLine != "" {
 		sections = append(sections, "")
 		sections = append(sections, progLine)
@@ -193,21 +194,14 @@ func truncate(s string, maxWidth int) string {
 
 // -- Progress --
 
-func renderProgressBar(z *roon.Zone, prog progress.Model) string {
+func renderProgressBar(z *roon.Zone, prog progress.Model, seekPos int) string {
 	if z.NowPlaying == nil || z.NowPlaying.Length == 0 {
 		return ""
 	}
 
 	np := z.NowPlaying
-	seekPos := 0
-	if np.SeekPosition != nil {
-		seekPos = *np.SeekPosition
-	}
-
+	seekPos = clamp(seekPos, 0, np.Length)
 	pct := float64(seekPos) / float64(np.Length)
-	if pct > 1 {
-		pct = 1
-	}
 	bar := prog.ViewAs(pct)
 
 	timeStr := styleTime.Render(
