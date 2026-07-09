@@ -2,6 +2,7 @@ package lyrics
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,24 @@ type lrclibResponse struct {
 
 // Fetch queries LRCLIB for the given signature. Returns ErrNotFound (404) if
 // no match exists. Network/parse errors are returned as-is.
+//
+// Roon joins collaborators as "A / B / C" in the artist line, which rarely
+// matches LRCLIB's single-artist field, so a not-found result is retried once
+// with just the primary artist.
 func Fetch(sig Signature) (*Lyrics, error) {
+	lyr, err := fetchOnce(sig)
+	if !errors.Is(err, ErrNotFound) {
+		return lyr, err
+	}
+	if primary, _, found := strings.Cut(sig.Artist, " / "); found {
+		retry := sig
+		retry.Artist = strings.TrimSpace(primary)
+		return fetchOnce(retry)
+	}
+	return nil, ErrNotFound
+}
+
+func fetchOnce(sig Signature) (*Lyrics, error) {
 	if sig.Empty() {
 		return nil, ErrNotFound
 	}
