@@ -357,6 +357,14 @@ func (b *browserModel) selectCurrent() tea.Cmd {
 		if err != nil {
 			return browseResultMsg{err: err}
 		}
+		// Roon wraps a track's action menu in an intermediate level holding
+		// only the track item again; descend automatically so the user lands
+		// on the actual Play Now / Queue menu instead of a one-item list.
+		if len(lr.Items) == 1 && lr.Items[0].Hint == "action_list" && lr.Items[0].ItemKey != nil {
+			if inner, ierr := sess.open(*lr.Items[0].ItemKey, ""); ierr == nil && len(inner.Items) > 0 {
+				lr = inner
+			}
+		}
 		if len(lr.Items) == 0 {
 			if artistName != "" {
 				// Empty-page fallback uses the synthetic session so the
