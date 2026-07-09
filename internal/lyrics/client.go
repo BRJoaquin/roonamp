@@ -14,7 +14,9 @@ import (
 const (
 	lrclibBase = "https://lrclib.net/api/get"
 	userAgent  = "roonamp (https://github.com/brokenrubik/roonamp)"
-	httpTimeo  = 8 * time.Second
+	// LRCLIB can be slow under load (~8s responses observed); the fetch runs
+	// off the UI loop, so a generous timeout costs nothing interactively.
+	httpTimeo = 20 * time.Second
 )
 
 // httpClient is package-level so tests / future flags can override it.
