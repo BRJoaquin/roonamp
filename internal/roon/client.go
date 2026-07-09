@@ -12,6 +12,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Extension identity presented to the Roon Core on registration.
+const (
+	extensionID        = "com.brokenrubik.roonamp"
+	extensionName      = "roonamp"
+	extensionVersion   = "0.1.0"
+	extensionPublisher = "BrokenRubik"
+	extensionEmail     = "dev@brokenrubik.com"
+)
+
 type Client struct {
 	host     string
 	port     string
@@ -173,11 +182,11 @@ func (c *Client) GetInfo() (*InfoResponse, error) {
 
 func (c *Client) Register() (*RegisterResponse, error) {
 	req := RegisterRequest{
-		ExtensionID:      "com.brokenrubik.roonamp",
-		DisplayName:      "roonamp",
-		DisplayVersion:   "0.1.0",
-		Publisher:        "BrokenRubik",
-		Email:            "dev@brokenrubik.com",
+		ExtensionID:      extensionID,
+		DisplayName:      extensionName,
+		DisplayVersion:   extensionVersion,
+		Publisher:        extensionPublisher,
+		Email:            extensionEmail,
 		RequiredServices: []string{"com.roonlabs.transport:2", "com.roonlabs.browse:1", "com.roonlabs.image:1"},
 		OptionalServices: []string{},
 		ProvidedServices: []string{"com.roonlabs.ping:1"},
