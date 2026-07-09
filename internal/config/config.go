@@ -33,48 +33,46 @@ func Load() Config {
 	return cfg
 }
 
-func TokenPath() string {
+// configPath returns the path of a named file inside the roonamp config
+// directory (XDG_CONFIG_HOME or ~/.config).
+func configPath(name string) string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "roonamp", "token")
+	return filepath.Join(dir, "roonamp", name)
 }
 
-func LoadToken() string {
-	data, err := os.ReadFile(TokenPath())
+// loadString reads a single-value config file, trimming surrounding
+// whitespace so hand-edited files with trailing newlines still work.
+// Returns "" if the file doesn't exist.
+func loadString(name string) string {
+	data, err := os.ReadFile(configPath(name))
 	if err != nil {
 		return ""
 	}
-	return string(data)
+	return strings.TrimSpace(string(data))
 }
 
-func SaveToken(token string) error {
-	path := TokenPath()
+func saveString(name, value string) error {
+	path := configPath(name)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(token), 0600)
+	return os.WriteFile(path, []byte(value), 0600)
 }
 
-func ServerPath() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(dir, "roonamp", "server")
-}
+func LoadToken() string            { return loadString("token") }
+func SaveToken(token string) error { return saveString("token", token) }
+
+func LoadZone() string             { return loadString("zone") }
+func SaveZone(zoneID string) error { return saveString("zone", zoneID) }
 
 // LoadServer returns the last successfully connected host and port,
 // or empty strings if none has been cached yet.
 func LoadServer() (host, port string) {
-	data, err := os.ReadFile(ServerPath())
-	if err != nil {
-		return "", ""
-	}
-	host, port, ok := strings.Cut(strings.TrimSpace(string(data)), ":")
+	host, port, ok := strings.Cut(loadString("server"), ":")
 	if !ok {
 		return "", ""
 	}
@@ -82,61 +80,21 @@ func LoadServer() (host, port string) {
 }
 
 func SaveServer(host, port string) error {
-	path := ServerPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(host+":"+port), 0600)
-}
-
-func ZonePath() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(dir, "roonamp", "zone")
-}
-
-func LoadZone() string {
-	data, err := os.ReadFile(ZonePath())
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-func SaveZone(zoneID string) error {
-	path := ZonePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(zoneID), 0600)
-}
-
-func prefsPath() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(dir, "roonamp", "prefs")
+	return saveString("server", host+":"+port)
 }
 
 func LoadShowArt() bool {
-	data, err := os.ReadFile(prefsPath())
-	if err != nil {
+	v := loadString("prefs")
+	if v == "" {
 		return true // default: show art
 	}
-	return string(data) != "0"
+	return v != "0"
 }
 
-func SaveShowArt(show bool) {
-	path := prefsPath()
-	_ = os.MkdirAll(filepath.Dir(path), 0700)
+func SaveShowArt(show bool) error {
 	val := "1"
 	if !show {
 		val = "0"
 	}
-	_ = os.WriteFile(path, []byte(val), 0600)
+	return saveString("prefs", val)
 }
