@@ -156,6 +156,99 @@ func (b *browserModel) maxVisible() int {
 	return v
 }
 
+// handleKey processes a key press in the browser view. It returns a command
+// to run and whether the browser is done (i.e. return to the player view).
+func (b *browserModel) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	// Any key dismisses a transient status (e.g. "search failed: ...").
+	if b.statusMsg != "" {
+		b.statusMsg = ""
+	}
+
+	// Filter input mode
+	if b.filtering {
+		switch msg.String() {
+		case "esc":
+			b.clearFilter()
+		case "enter":
+			b.filtering = false
+		case "backspace":
+			if r := []rune(b.filterBuf); len(r) > 0 {
+				b.filterBuf = string(r[:len(r)-1])
+				b.applyFilter()
+			}
+		default:
+			if r := msg.Runes; len(r) > 0 {
+				b.filterBuf += string(r)
+				b.applyFilter()
+			}
+		}
+		return nil, false
+	}
+
+	// Search input mode (global library search)
+	if b.searching {
+		switch msg.String() {
+		case "esc":
+			b.searching = false
+			b.searchBuf = ""
+		case "enter":
+			q := strings.TrimSpace(b.searchBuf)
+			b.searching = false
+			b.searchBuf = ""
+			if q == "" {
+				return nil, false
+			}
+			// Snapshot pre-search state so a failure restores the user
+			// to exactly where they were. applyResult clears the stack
+			// on success since search results are a fresh root.
+			b.searchSnapshot = &browseSnapshot{
+				items:   b.items,
+				title:   b.title,
+				cursor:  b.cursor,
+				offset:  b.offset,
+				stack:   b.stack,
+				session: b.session,
+			}
+			b.clearFilter()
+			b.loading = true
+			b.title = "Searching..."
+			return b.searchCmd(q), false
+		case "backspace":
+			if r := []rune(b.searchBuf); len(r) > 0 {
+				b.searchBuf = string(r[:len(r)-1])
+			}
+		default:
+			if r := msg.Runes; len(r) > 0 {
+				b.searchBuf += string(r)
+			}
+		}
+		return nil, false
+	}
+
+	// Normal navigation
+	switch msg.String() {
+	case "j", "down":
+		b.moveDown()
+	case "k", "up":
+		b.moveUp()
+	case "enter", "l", "right":
+		return b.selectCurrent(), false
+	case "h", "left", "backspace":
+		if !b.goBack() {
+			return nil, true
+		}
+	case "/":
+		b.filtering = true
+		b.filterBuf = ""
+	case "s":
+		b.searching = true
+		b.searchBuf = ""
+	case "esc", "q":
+		return nil, true
+	}
+	return nil, false
+}
+
 // activate opens the browse root for the given zone
 func (b *browserModel) activate(zoneID string) tea.Cmd {
 	b.zoneID = zoneID

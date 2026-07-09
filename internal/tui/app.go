@@ -300,7 +300,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Browser view keys
 	if m.view == viewBrowser {
-		return m.handleBrowserKey(msg)
+		cmd, exit := m.browser.handleKey(msg)
+		if exit {
+			m.view = viewPlayer
+		}
+		return m, cmd
 	}
 
 	// Lyrics view keys
@@ -426,116 +430,6 @@ func (m Model) openBrowser() (tea.Model, tea.Cmd) {
 	m.browser.setSize(m.width, m.height)
 	cmd := m.browser.activate(z.ZoneID)
 	return m, cmd
-}
-
-func (m Model) handleBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	b := &m.browser
-
-	// Any key dismisses a transient status (e.g. "search failed: ...").
-	if b.statusMsg != "" {
-		b.statusMsg = ""
-	}
-
-	// Filter input mode
-	if b.filtering {
-		switch msg.String() {
-		case "esc":
-			b.clearFilter()
-			return m, nil
-		case "enter":
-			b.filtering = false
-			return m, nil
-		case "backspace":
-			if len(b.filterBuf) > 0 {
-				b.filterBuf = b.filterBuf[:len(b.filterBuf)-1]
-				b.applyFilter()
-			}
-			return m, nil
-		default:
-			if r := msg.Runes; len(r) > 0 {
-				b.filterBuf += string(r)
-				b.applyFilter()
-			}
-			return m, nil
-		}
-	}
-
-	// Search input mode (global library search)
-	if b.searching {
-		switch msg.String() {
-		case "esc":
-			b.searching = false
-			b.searchBuf = ""
-			return m, nil
-		case "enter":
-			q := strings.TrimSpace(b.searchBuf)
-			b.searching = false
-			b.searchBuf = ""
-			if q == "" {
-				return m, nil
-			}
-			// Snapshot pre-search state so a failure restores the user
-			// to exactly where they were. applyResult clears the stack
-			// on success since search results are a fresh root.
-			b.searchSnapshot = &browseSnapshot{
-				items:   b.items,
-				title:   b.title,
-				cursor:  b.cursor,
-				offset:  b.offset,
-				stack:   b.stack,
-				session: b.session,
-			}
-			b.clearFilter()
-			b.loading = true
-			b.title = "Searching..."
-			return m, b.searchCmd(q)
-		case "backspace":
-			if len(b.searchBuf) > 0 {
-				b.searchBuf = b.searchBuf[:len(b.searchBuf)-1]
-			}
-			return m, nil
-		default:
-			if r := msg.Runes; len(r) > 0 {
-				b.searchBuf += string(r)
-			}
-			return m, nil
-		}
-	}
-
-	// Normal navigation
-	switch msg.String() {
-	case "j", "down":
-		b.moveDown()
-		return m, nil
-	case "k", "up":
-		b.moveUp()
-		return m, nil
-	case "enter", "l", "right":
-		cmd := b.selectCurrent()
-		if cmd != nil {
-			return m, cmd
-		}
-		return m, nil
-	case "h", "left", "backspace":
-		if b.goBack() {
-			return m, nil
-		}
-		m.view = viewPlayer
-		return m, nil
-	case "/":
-		b.filtering = true
-		b.filterBuf = ""
-		return m, nil
-	case "s":
-		b.searching = true
-		b.searchBuf = ""
-		return m, nil
-	case "esc", "q":
-		m.view = viewPlayer
-		return m, nil
-	}
-
-	return m, nil
 }
 
 // -- Zone switching --
