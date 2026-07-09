@@ -22,6 +22,8 @@ const (
 	pingPeriod = 10 * time.Second
 	// writeWait bounds a single write so a half-dead socket fails fast.
 	writeWait = 10 * time.Second
+	// requestTimeout bounds how long a request waits for its reply.
+	requestTimeout = 30 * time.Second
 )
 
 // MooConn handles MOO protocol messaging over WebSocket.
@@ -52,47 +54,53 @@ func NewMooConn(ws *websocket.Conn) *MooConn {
 	}
 }
 
-// Send sends a MOO REQUEST and waits for the COMPLETE/CONTINUE response.
+// Send sends a MOO REQUEST and waits up to requestTimeout for the
+// COMPLETE/CONTINUE response.
 func (m *MooConn) Send(servicePath string, body interface{}) (*MooMessage, error) {
+	return m.request(servicePath, body, nil, requestTimeout)
+}
+
+// Subscribe sends a MOO REQUEST and calls handler on every CONTINUE. It waits
+// up to timeout for the first reply (the initial state); a timeout of 0 waits
+// forever, which first-time registration needs — the reply only arrives once
+// the user enables the extension in Roon Settings.
+func (m *MooConn) Subscribe(servicePath string, body interface{}, handler func(*MooMessage), timeout time.Duration) (*MooMessage, error) {
+	return m.request(servicePath, body, handler, timeout)
+}
+
+func (m *MooConn) request(servicePath string, body interface{}, sub func(*MooMessage), timeout time.Duration) (*MooMessage, error) {
 	id := m.reqID.Add(1)
 	ch := make(chan *MooMessage, 1)
 
 	m.handlerMu.Lock()
 	m.handlers[id] = ch
+	if sub != nil {
+		m.subHandlers[id] = sub
+	}
 	m.handlerMu.Unlock()
 
+	cleanup := func() {
+		m.handlerMu.Lock()
+		delete(m.handlers, id)
+		delete(m.subHandlers, id)
+		m.handlerMu.Unlock()
+	}
+
 	if err := m.writeRequest(id, servicePath, body); err != nil {
+		cleanup()
 		return nil, err
 	}
 
+	if timeout <= 0 {
+		return <-ch, nil
+	}
 	select {
 	case msg := <-ch:
 		return msg, nil
-	case <-time.After(30 * time.Second):
-		m.handlerMu.Lock()
-		delete(m.handlers, id)
-		m.handlerMu.Unlock()
+	case <-time.After(timeout):
+		cleanup()
 		return nil, fmt.Errorf("moo request timeout: %s", servicePath)
 	}
-}
-
-// Subscribe sends a MOO REQUEST and calls handler on every CONTINUE.
-// Returns the first CONTINUE message (initial state).
-func (m *MooConn) Subscribe(servicePath string, body interface{}, handler func(*MooMessage)) (*MooMessage, error) {
-	id := m.reqID.Add(1)
-	ch := make(chan *MooMessage, 1)
-
-	m.handlerMu.Lock()
-	m.handlers[id] = ch
-	m.subHandlers[id] = handler
-	m.handlerMu.Unlock()
-
-	if err := m.writeRequest(id, servicePath, body); err != nil {
-		return nil, err
-	}
-
-	msg := <-ch
-	return msg, nil
 }
 
 // MOO/1 wire format:

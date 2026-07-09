@@ -176,9 +176,17 @@ func (c *Client) Register() (*RegisterResponse, error) {
 		Token:            c.token,
 	}
 
+	// First-time registration (no token yet) blocks until the user enables
+	// the extension in Roon Settings -> Extensions, so it must wait without a
+	// timeout. Re-registration with a saved token answers immediately; the
+	// timeout there keeps a lost reply from hanging the reconnect loop.
+	timeout := requestTimeout
+	if c.token == "" {
+		timeout = 0
+	}
 	resp, err := c.conn().Subscribe("com.roonlabs.registry:1/register", req, func(msg *MooMessage) {
 		log.Printf("register update: %s", string(msg.Body))
-	})
+	}, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +229,7 @@ func (c *Client) SubscribeZones() error {
 	req := ZonesSubscribeRequest{SubscriptionKey: "0"}
 	_, err := c.conn().Subscribe("com.roonlabs.transport:2/subscribe_zones", req, func(msg *MooMessage) {
 		c.handleZoneUpdate(msg)
-	})
+	}, requestTimeout)
 	return err
 }
 
