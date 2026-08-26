@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"roonamp/internal/roon"
+	"github.com/BRJoaquin/roon-go"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"

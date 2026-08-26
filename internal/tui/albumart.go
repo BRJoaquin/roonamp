@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"roonamp/internal/roon"
+	"github.com/BRJoaquin/roon-go"
 
 	"github.com/charmbracelet/lipgloss"
 )

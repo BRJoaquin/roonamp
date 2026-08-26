@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BRJoaquin/roon-go"
 	"roonamp/internal/lyrics"
-	"roonamp/internal/roon"
 
 	"github.com/charmbracelet/lipgloss"
 )

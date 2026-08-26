@@ -9,7 +9,9 @@ import (
 
 	"roonamp/internal/config"
 	"roonamp/internal/lyrics"
-	"roonamp/internal/roon"
+
+	"github.com/BRJoaquin/roon-go"
+	"github.com/BRJoaquin/roon-go/browse"
 
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
@@ -392,7 +394,10 @@ func (m Model) setStatus(msg string, isErr bool) (tea.Model, tea.Cmd) {
 func (m Model) startRadioCmd(zoneID, title, artist string) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
-		if err := startSongRadio(client, zoneID, title, artist); err != nil {
+		// A dedicated session key keeps the browser's cached item_keys
+		// (main and "synthetic" sessions) valid across the side trip.
+		s := browse.Session{Client: client, ZoneID: zoneID, Key: "radio"}
+		if err := browse.StartSongRadio(s, title, artist); err != nil {
 			log.Printf("start radio: %v", err)
 			return radioResultMsg{err: err}
 		}

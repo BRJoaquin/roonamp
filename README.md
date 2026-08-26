@@ -24,7 +24,7 @@ Connects directly to your Roon Core over WebSocket using the native MOO protocol
 
 ## Requirements
 
-- [Go](https://go.dev/dl/) 1.21 or later
+- [Go](https://go.dev/dl/) 1.26 or later
 - A running [Roon Core](https://roon.app) on your network
 - A terminal with true color support (most modern terminals)
 
@@ -167,12 +167,14 @@ Blank lines and `#` comments are ignored. If no entry matches a live zone, all z
 
 ## How it works
 
-roonamp implements two of Roon's proprietary protocols:
+roonamp talks to the Core through [roon-go](https://github.com/BRJoaquin/roon-go), a Go library that implements two of Roon's proprietary protocols:
 
 - **MOO** (over WebSocket) -- message framing protocol for all communication with Roon Core. HTTP-like format with `MOO/1` prefix, request IDs, and JSON bodies.
 - **SOOD** (UDP multicast) -- discovery protocol for finding Roon Cores on the network. Used automatically when no address is given and the cached one fails.
 
 The app registers as a Roon extension, subscribes to zone updates, and provides real-time transport control. The library browser maintains a client-side navigation stack for instant back-navigation without additional API calls.
+
+Want to drive Roon from a language model? [roon-mcp](https://github.com/BRJoaquin/roon-mcp) is an MCP server built on the same library.
 
 ## Limitations
 
@@ -186,6 +188,7 @@ The app registers as a Roon extension, subscribes to zone updates, and provides 
 - [Lip Gloss](https://github.com/charmbracelet/lipgloss) -- Styling
 - [Bubbles](https://github.com/charmbracelet/bubbles) -- Progress bar and spring animations
 - [sahilm/fuzzy](https://github.com/sahilm/fuzzy) -- fzf-style fuzzy matching
+- [roon-go](https://github.com/BRJoaquin/roon-go) -- Roon MOO/SOOD client and browse helpers
 - [Gorilla WebSocket](https://github.com/gorilla/websocket) -- WebSocket client
 
 ## License

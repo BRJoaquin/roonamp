@@ -7,12 +7,21 @@ import (
 	"os"
 	"time"
 
+	"github.com/BRJoaquin/roon-go"
 	"roonamp/internal/config"
-	"roonamp/internal/roon"
 	"roonamp/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// roonampIdentity is the extension identity shown in Roon Settings -> Extensions.
+var roonampIdentity = roon.Identity{
+	ID:          "com.brokenrubik.roonamp",
+	DisplayName: "roonamp",
+	Version:     "0.1.0",
+	Publisher:   "BrokenRubik",
+	Email:       "dev@brokenrubik.com",
+}
 
 func main() {
 	// Discard log output so it doesn't corrupt the TUI.
@@ -75,7 +84,7 @@ func main() {
 func connectClient(cfg config.Config, token string) (*roon.Client, error) {
 	try := func(host, port string) (*roon.Client, error) {
 		fmt.Printf("Connecting to ws://%s:%s/api ...\n", host, port)
-		c := roon.NewClient(host, port, token)
+		c := roon.NewClient(host, port, token, roonampIdentity)
 		if err := c.Connect(); err != nil {
 			return nil, fmt.Errorf("connect failed: %w", err)
 		}

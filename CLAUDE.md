@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A terminal TUI music controller for Roon, written in Go using the Charm ecosystem (Bubble Tea, Lip Gloss, Bubbles). It communicates directly with the Roon Core over WebSocket using the native MOO protocol. No Node.js bridge, no HTTP proxy -- pure Go talking to Roon.
 
+The Roon protocol code lives in a separate library, **roon-go** (`github.com/BRJoaquin/roon-go`, checked out as a sibling at `../roon-go`): MOO framing, SOOD discovery, the `Client`, the JSON types, and the `browse` subpackage (search, action menus, radio). A sibling project **roon-mcp** (`../roon-mcp`) is an MCP server built on the same library. This repo only holds the TUI, its config, and the lyrics client.
+
 ## Commands
 
 ```bash
@@ -18,6 +20,7 @@ gofmt -l -w .                  # format (CI/standard Go formatting)
 ```
 
 - Requires Go 1.26+ (see `go.mod`).
+- To work on roon-go at the same time, keep a git-ignored `go.work` with `use (. ../roon-go)` (already present locally). Without it, `go build` uses the tagged `roon-go` version from `go.mod`. After changing the library, tag it and bump the require with `go get github.com/BRJoaquin/roon-go@<tag>`.
 - There is no test suite, no Makefile, and no linter config -- `go vet` and `gofmt` are the only checks.
 - Running needs a reachable Roon Core. Address resolution order: `-host`/`-port` flags, `ROON_HOST`/`ROON_PORT` env vars, last-good address cached in `~/.config/roonamp/server`, then SOOD UDP discovery. The HTTP port varies per install (commonly 9100/9150/9200/9330).
 - The binary writes nothing to stdout once the TUI starts; `log` output is discarded (see "Logging" below) to avoid corrupting the alt-screen.
@@ -36,7 +39,8 @@ gofmt -l -w .                  # format (CI/standard Go formatting)
 ┌─────────────────┐                            ┌───────────┐
 │   roonamp (Go)  │ <──── WebSocket ──────────>│ Roon Core │
 │   Bubble Tea    │   ws://{ip}:{port}/api     │           │
-└─────────────────┘   MOO protocol messages    └───────────┘
+│   + roon-go     │   MOO protocol messages    │           │
+└─────────────────┘                            └───────────┘
 ```
 
 ### Startup sequence (main.go)
@@ -47,7 +51,7 @@ All network setup is **synchronous and blocking, before the TUI launches**: `Con
 
 There are two concurrent worlds and one bridge between them:
 
-1. **MOO/WebSocket goroutine** (`roon/moo.go`): `MooConn.ReadLoop()` runs in a background goroutine started by `Client.Connect`. It parses every incoming frame and dispatches by `Request-Id`: REQUEST/COMPLETE replies go to a per-request reply channel registered in `handlers`; subscription CONTINUE frames are routed to the handler registered via `Subscribe`. `Client.handleZoneUpdate` is that handler for zones -- it mutates the client's zone map under a mutex and then invokes the callback installed via `Client.SetOnZonesUpdated`.
+1. **MOO/WebSocket goroutine** (roon-go `moo.go`): `MooConn.ReadLoop()` runs in a background goroutine started by `Client.Connect`. It parses every incoming frame and dispatches by `Request-Id`: REQUEST/COMPLETE replies go to a per-request reply channel registered in `handlers`; subscription CONTINUE frames are routed to the handler registered via `Subscribe`. `Client.handleZoneUpdate` is that handler for zones -- it mutates the client's zone map under a mutex and then invokes the callback installed via `Client.SetOnZonesUpdated`.
 
 2. **Bubble Tea event loop** (`tui/app.go`): a single `Model` drives both the player and browser views (a `view` field routes `Update`/`View`). State changes only ever happen inside `Update`.
 
@@ -72,18 +76,19 @@ roonamp/
 ├── internal/
 │   ├── config/
 │   │   └── config.go              # CLI flags, env vars, XDG persistence (token, zone, prefs, zones whitelist)
-│   ├── roon/
-│   │   ├── sood.go                # SOOD UDP discovery (fallback when no address given/cached)
-│   │   ├── moo.go                 # MOO/1 message framing over WebSocket
-│   │   ├── client.go              # High-level Roon API client
-│   │   └── types.go               # All JSON-mapped structs
+│   ├── lyrics/                    # LRCLIB lyrics client + on-disk cache
 │   └── tui/
 │       ├── app.go                 # Main Bubble Tea model, view routing, key handling
 │       ├── player.go              # Now Playing view rendering
 │       ├── browser.go             # Library browser (custom list with fuzzy filter)
+│       ├── lyrics.go              # Lyrics view
 │       ├── albumart.go            # Album art fetching and terminal rendering
 │       └── styles.go              # Lip Gloss styles and color palette
+../roon-go/                        # library: client.go, moo.go, sood.go, types.go, browse/
+../roon-mcp/                       # MCP server built on roon-go
 ```
+
+The Roon `Client`, the JSON types (`roon.Zone`, `roon.BrowseItem`, ...), and the browse drills (`browse.Session`, `browse.Search`, `browse.OpenAlbumsForArtist`, `browse.StartSongRadio`, `browse.UnwrapActionList`) are imported from roon-go. The extension identity (`roonampIdentity` in `main.go`) is passed to `roon.NewClient`.
 
 ## Protocols
 
@@ -96,12 +101,13 @@ roonamp/
 
 ### SOOD Discovery (UDP)
 
-- Implemented in `sood.go`; used automatically when no address is given via flags/env and the cached address fails
+- Implemented in roon-go `sood.go` (`roon.Discover`); used automatically when no address is given via flags/env and the cached address fails
 - Roon broadcasts on UDP 9003, multicast 239.255.90.90
 - Discovery returns early ~500ms after the first core responds; the last successfully connected address is cached at `~/.config/roonamp/server` so discovery only runs again when the Core's IP changes
 
 ## Roon API notes
 
+- **One connection per extension id**: a second roonamp instance (or any tool that registers as `com.brokenrubik.roonamp`) makes the Core drop the other connection every ~2s. Stop the running `roonamp` before recording `demo.tape` or running a second copy. `ROON_DEBUG=1` logs every MOO frame (roon-go), but roonamp discards `log` output, so use it in roon-mcp or a small probe instead.
 - `zones_removed` sends an array of zone ID **strings**, not Zone objects
 - `now_playing` can be null (nothing playing)
 - `volume` on an output can be null (fixed volume device)
@@ -120,6 +126,7 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 - Back navigation: pop from stack instantly (no API call, cursor position preserved)
 - Fuzzy filter: uses `sahilm/fuzzy` (same algorithm as fzf) for `/` filtering
 - Global library search (`s`): the Roon "Search" item lives inside Library on stock installs, so `searchCmd` does `pop_all` → loads root → looks for Search → otherwise drills into "Library" and looks there → browses Search with `input: <query>`
+- The browse primitives live in roon-go's `browse` package; `browser.go` only keeps the Bubble Tea model, the navigation stack, and the fuzzy filter.
 - Artist pages and `multi_session_key`: drilling into an artist prepends a synthetic "Show all albums (incl. streaming)" row that runs a side-trip search → Albums drill. To avoid invalidating the main session's `item_key`s (the side trip needs `pop_all`), the synthetic action and the empty-page auto-fallback both run under `multi_session_key: "synthetic"`. Each `browseLevel` on the stack remembers which session it belonged to so `goBack` restores the right session along with the items.
 
 ## Current state
@@ -169,6 +176,7 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 ## Dependencies
 
 ```
+github.com/BRJoaquin/roon-go         v0.1.x   (Roon MOO/SOOD client + browse helpers)
 github.com/charmbracelet/bubbletea   v1.3.x
 github.com/charmbracelet/lipgloss    v1.1.x
 github.com/charmbracelet/bubbles     v1.0.x   (progress bar)
