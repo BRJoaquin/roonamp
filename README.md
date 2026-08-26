@@ -150,8 +150,20 @@ roonamp stores its data in `~/.config/roonamp/` (or `$XDG_CONFIG_HOME/roonamp/`)
 | `token` | Roon auth token (auto-saved on first auth) |
 | `zone` | Last selected zone ID |
 | `prefs` | UI preferences (album art on/off) |
+| `zones` | Optional zone whitelist (see below) |
 
 No manual configuration is needed. All files are created automatically.
+
+### Zone whitelist
+
+If your Core exposes more zones than you actually use, create `~/.config/roonamp/zones` with one entry per line to only show those zones in the switcher:
+
+```
+# case-insensitive substring of the zone's display name, or an exact zone ID
+fiio
+```
+
+Blank lines and `#` comments are ignored. If no entry matches a live zone, all zones are shown (so a typo never leaves you with an empty zone list). Delete the file to show all zones again.
 
 ## How it works
 

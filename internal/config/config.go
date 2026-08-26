@@ -69,6 +69,22 @@ func SaveToken(token string) error { return saveString("token", token) }
 func LoadZone() string             { return loadString("zone") }
 func SaveZone(zoneID string) error { return saveString("zone", zoneID) }
 
+// LoadZoneFilter returns the zone whitelist: one entry per line in the
+// "zones" config file. Entries match zone display names case-insensitively
+// (substring match), or a zone ID exactly. Blank lines and lines starting
+// with '#' are ignored. An empty result means no filtering (show all zones).
+func LoadZoneFilter() []string {
+	var entries []string
+	for _, line := range strings.Split(loadString("zones"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entries = append(entries, line)
+	}
+	return entries
+}
+
 // LoadServer returns the last successfully connected host and port,
 // or empty strings if none has been cached yet.
 func LoadServer() (host, port string) {

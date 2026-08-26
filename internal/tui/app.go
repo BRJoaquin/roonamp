@@ -101,9 +101,10 @@ type Model struct {
 	seekAnchorPlaying bool
 	lastTrackSig      lyrics.Signature
 
-	savedZone string // zone ID to restore on startup
-	connected bool   // WebSocket link state, refreshed on each seek tick
-	err       error
+	savedZone  string   // zone ID to restore on startup
+	zoneFilter []string // whitelist from the "zones" config file; empty = show all
+	connected  bool     // WebSocket link state, refreshed on each seek tick
+	err        error
 }
 
 func NewModel(client *roon.Client) Model {
@@ -136,6 +137,7 @@ func NewModel(client *roon.Client) Model {
 		browser:     newBrowser(client),
 		showArt:     config.LoadShowArt(),
 		savedZone:   config.LoadZone(),
+		zoneFilter:  config.LoadZoneFilter(),
 		connected:   true,
 		swipeSpring: harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.6),
 		volSpring:   harmonica.NewSpring(harmonica.FPS(60), 10.0, 0.4),
@@ -637,12 +639,40 @@ func nearZero(v, threshold float64) bool {
 
 // -- Zone helpers --
 
+// zoneMatchesFilter reports whether a zone passes the whitelist: an entry
+// matches on exact zone ID or as a case-insensitive substring of the
+// display name.
+func zoneMatchesFilter(z *roon.Zone, filter []string) bool {
+	name := strings.ToLower(z.DisplayName)
+	for _, f := range filter {
+		if f == z.ZoneID || strings.Contains(name, strings.ToLower(f)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) applyZones(zoneMap map[string]*roon.Zone) {
 	ids := make([]string, 0, len(zoneMap))
 	for id := range zoneMap {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+
+	// Apply the whitelist from ~/.config/roonamp/zones. If it matches
+	// nothing (e.g. a typo'd entry), fall back to all zones rather than
+	// leaving the UI empty.
+	if len(m.zoneFilter) > 0 {
+		kept := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if zoneMatchesFilter(zoneMap[id], m.zoneFilter) {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) > 0 {
+			ids = kept
+		}
+	}
 
 	m.zones = make([]*roon.Zone, len(ids))
 	for i, id := range ids {

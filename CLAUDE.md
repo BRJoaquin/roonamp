@@ -71,7 +71,7 @@ roonamp/
 ├── README.md
 ├── internal/
 │   ├── config/
-│   │   └── config.go              # CLI flags, env vars, XDG persistence (token, zone, prefs)
+│   │   └── config.go              # CLI flags, env vars, XDG persistence (token, zone, prefs, zones whitelist)
 │   ├── roon/
 │   │   ├── sood.go                # SOOD UDP discovery (fallback when no address given/cached)
 │   │   ├── moo.go                 # MOO/1 message framing over WebSocket
@@ -135,6 +135,7 @@ The browser uses a **client-side navigation stack** instead of relying on Roon's
 - Album art rendering in terminal (half-block characters)
 - Volume auto-hide after 5 seconds (shows on local or external changes)
 - Persisted preferences: selected zone, show/hide album art
+- Zone whitelist: optional `~/.config/roonamp/zones` file (one entry per line; exact zone ID or case-insensitive substring of the display name; `#` comments; no matches → fall back to all zones)
 - Text truncation for long track/artist/album names
 - Queue info display (remaining tracks and time)
 - Zone settings display (shuffle, loop)
