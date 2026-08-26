@@ -3,7 +3,7 @@ module roonamp
 go 1.26.1
 
 require (
-	github.com/BRJoaquin/roon-go v0.2.0
+	github.com/BRJoaquin/roon-go v0.2.1
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/harmonica v0.2.0

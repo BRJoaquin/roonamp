@@ -1,5 +1,5 @@
-github.com/BRJoaquin/roon-go v0.2.0 h1:OqQpZYxt2Mvz+85nKgzUSFHOSCnwfdUpitLXHcbFM6M=
-github.com/BRJoaquin/roon-go v0.2.0/go.mod h1:hllBJkW07yaFy+r8QD0ca8oUfWIYmQxp2KKoiJD9454=
+github.com/BRJoaquin/roon-go v0.2.1 h1:8ZxvZV7L2W0wBcMSvLzBRfZQJENu451e4cCqMQvEzwk=
+github.com/BRJoaquin/roon-go v0.2.1/go.mod h1:hllBJkW07yaFy+r8QD0ca8oUfWIYmQxp2KKoiJD9454=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1/go.mod h1:uYgXzlJ7ZpABp8OJ+exZzJJhRNQ2ASbcXHWsFqH8hp8=
 github.com/charmbracelet/bubbles v1.0.0 h1:12J8/ak/uCZEMQ6KU7pcfwceyjLlWsDLAxB5fXonfvc=
